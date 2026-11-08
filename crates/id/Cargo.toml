@@ -1,0 +1,14 @@
+[package]
+name = "resysto-id"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde.workspace = true
+uuid.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uuid = { workspace = true, features = ["v7"] }
+
+[lints]
+workspace = true
