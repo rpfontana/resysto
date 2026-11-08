@@ -1,0 +1,29 @@
+name: resysto-v2
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v4.0.0
+    command: start --import-file /init.surql surrealkv:/data/resysto
+    ports:
+      - "127.0.0.1:${SURREAL_PORT:-18000}:8000"
+    environment:
+      SURREAL_USER: root
+      SURREAL_PASS: root
+      SURREAL_QUERY_TIMEOUT: 90s
+      # Development guard for D8: an unbatched write fails here before it fails in production.
+      SURREAL_TRANSACTION_MAX_WRITE_KEYS: "20000"
+      # The threshold must stay above the block cache, or a full cache refuses every query.
+      SURREAL_SURREALKV_BLOCK_CACHE_CAPACITY: "268435456"
+      SURREAL_MEMORY_THRESHOLD: "1073741824"
+    mem_limit: 2g
+    volumes:
+      - surrealdb:/data
+      - ./init.surql:/init.surql:ro
+    healthcheck:
+      test: ["CMD", "/surreal", "db", "is-ready", "--endpoint", "http://127.0.0.1:8000"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  surrealdb:
