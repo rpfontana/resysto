@@ -51,6 +51,7 @@ cfg-if = "1.0.5"
 console_error_panic_hook = "0.1.7"
 console_log = "1.1.0"
 http = "1.5.0"
+jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
 log = "0.4.35"
 serde = "1.0.229"
 serde_json = "1.0.154"
@@ -59,6 +60,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 tower = { version = "0.5.3", features = ["full"] }
 tower-http = { version = "0.6.11", features = ["full"] }
+surrealdb = "4.0.0"
 surrealdb-types = { version = "4.0.0", default-features = false }
 uuid = "1.29.1"
 wasm-bindgen = "0.2.130"
