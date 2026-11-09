@@ -66,8 +66,8 @@ wasm-bindgen = "0.2.130"
 # See https://github.com/leptos-rs/cargo-leptos for documentation of all the parameters
 [[workspace.metadata.leptos]]
 name = "resysto"
-bin-package = "server"
-lib-package = "frontend"
+bin-package = "resysto-server"
+lib-package = "resysto-frontend"
 site-root = "target/site"
 site-pkg-dir = "pkg"
 hash-files = true

@@ -1,10 +1,10 @@
 use std::error::Error;
 
-use app::{App, shell};
 use axum::Router;
 use leptos::logging::log;
 use leptos::prelude::*;
 use leptos_axum::{LeptosRoutes, generate_route_list};
+use resysto_app::{App, shell};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

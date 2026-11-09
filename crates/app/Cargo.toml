@@ -1,5 +1,5 @@
 [package]
-name = "app"
+name = "resysto-app"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

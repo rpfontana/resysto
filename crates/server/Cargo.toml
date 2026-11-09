@@ -1,11 +1,11 @@
 [package]
-name = "server"
+name = "resysto-server"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-app = { path = "../app", default-features = false, features = ["ssr"] }
+resysto-app = { path = "../app", default-features = false, features = ["ssr"] }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true
 
