@@ -12,6 +12,9 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <link rel="icon" href="/favicon.ico" sizes="32x32"/>
+                <link rel="icon" href="/logo-mark.svg" type="image/svg+xml"/>
+                <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
                 <AutoReload options=options.clone()/>
                 <HydrationScripts options=options.clone()/>
                 <HashedStylesheet options id="leptos"/>
