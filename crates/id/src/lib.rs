@@ -41,8 +41,7 @@ pub struct Id<T> {
 pub struct ParseIdError;
 
 impl<T> Id<T> {
-    /// Generates an id from the current time. Not available on `wasm32`.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Generates an id from the current time
     #[expect(
         clippy::new_without_default,
         reason = "a default id would be a fresh random one, created by accident"
@@ -144,7 +143,6 @@ impl fmt::Display for ParseIdError {
 
 impl Error for ParseIdError {}
 
-#[cfg(not(target_arch = "wasm32"))]
 mod surreal {
     use surrealdb_types::{
         Error, Kind, RecordId, RecordIdKey, SurrealValue, Table, Uuid, Value, conversion_error,

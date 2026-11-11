@@ -5,16 +5,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-resysto-app = { path = "../app", default-features = false, features = ["ssr"] }
-leptos = { workspace = true, features = [ "ssr" ]}
-leptos_axum.workspace = true
-
 axum.workspace = true
-simple_logger.workspace = true
 tokio.workspace = true
-tower.workspace = true
 tower-http.workspace = true
-log.workspace = true
 
 [lints]
 workspace = true

@@ -1,28 +1,18 @@
 use std::error::Error;
 
 use axum::Router;
-use leptos::logging::log;
-use leptos::prelude::*;
-use leptos_axum::{LeptosRoutes, generate_route_list};
-use resysto_app::{App, shell};
+use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let conf = get_configuration(None)?;
-    let addr = conf.leptos_options.site_addr;
-    let leptos_options = conf.leptos_options;
-    let routes = generate_route_list(App);
+    let addr = std::env::var("RESYSTO_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
+    let site = std::env::var("RESYSTO_SITE").unwrap_or_else(|_| "web/build".into());
 
-    let app = Router::new()
-        .leptos_routes(&leptos_options, routes, {
-            let leptos_options = leptos_options.clone();
-            move || shell(leptos_options.clone())
-        })
-        .fallback(leptos_axum::file_and_error_handler(shell))
-        .with_state(leptos_options);
+    let spa = ServeDir::new(&site).fallback(ServeFile::new(format!("{site}/200.html")));
+    let app = Router::new().fallback_service(spa);
 
-    log!("listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app.into_make_service()).await?;
+    println!("listening on http://{addr}");
+    axum::serve(listener, app).await?;
     Ok(())
 }
