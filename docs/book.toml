@@ -1,0 +1,23 @@
+[book]
+title = "Resysto Development Book"
+authors = ["Raffaele Fontana"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/book"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+no-section-label = false
+
+[output.html.search]
+enable = true
+limit-results = 30
+boost-title = 2
+boost-hierarchy = 1
+
+[output.html.code.hidelines]
+rust = "# "
