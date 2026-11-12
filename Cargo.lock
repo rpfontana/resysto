@@ -1925,6 +1925,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resysto-migrator"
+version = "0.1.0"
+dependencies = [
+ "resysto-surrealdb",
+ "surrealdb",
+ "tokio",
+]
+
+[[package]]
 name = "resysto-server"
 version = "0.1.0"
 dependencies = [

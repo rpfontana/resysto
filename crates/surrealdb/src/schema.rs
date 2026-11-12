@@ -3,20 +3,15 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::SurrealValue;
 
-use crate::{Db, Error};
+use crate::Error;
 
 /// A `.surql` file of a lane, embedded in the binary.
 #[derive(Debug, Clone, Copy)]
 pub struct SchemaFile {
-    /// Path inside the lane, and the key of the file's row in `__schema_file`.
+    /// Path inside the lane's `schema/` folder, and the key of the file's row in `__schema_file`.
     pub path: &'static str,
     pub sql: &'static str,
 }
-
-const TENANT: &[SchemaFile] = &[SchemaFile {
-    path: "access.surql",
-    sql: include_str!("../../../migrations/tenant/access.surql"),
-}];
 
 const SCHEMA_FILE_TABLE: &str = "
     DEFINE TABLE IF NOT EXISTS __schema_file SCHEMAFULL PERMISSIONS NONE;
@@ -87,37 +82,10 @@ fn hash(sql: &str, params: &[(&str, &str)]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-impl Db {
-    /// Creates `database` if missing and applies the tenant schema. Safe to repeat.
-    pub async fn provision_tenant(&self, database: &str) -> Result<(), Error> {
-        check_name(database)?;
-        self.system
-            .query(format!("DEFINE DATABASE IF NOT EXISTS `{database}`"))
-            .await?
-            .check()?;
-        let session = self.system_session(database).await?;
-        apply_schema(&session, TENANT, &[("access_key", &self.verifying_key)]).await?;
-        Ok(())
-    }
-}
-
-// The name is interpolated into SurrealQL as an identifier.
-fn check_name(name: &str) -> Result<(), Error> {
-    let valid = !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::InvalidName(name.to_owned()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{connect, info, new_tenant};
+    use crate::tests::{connect, new_tenant};
 
     const A: SchemaFile = SchemaFile {
         path: "a.surql",
@@ -191,28 +159,5 @@ mod tests {
         }
         let ran = apply_schema(&session, &[A, FIXED], &[]).await.unwrap();
         assert_eq!(ran, ["c.surql"]);
-    }
-
-    #[tokio::test]
-    async fn provisioning_again_leaves_the_schema_as_it_was() {
-        let db = connect().await;
-        let tenant = new_tenant(&db).await;
-        let before = info(&db, &tenant).await;
-        db.provision_tenant(&tenant).await.unwrap();
-        assert_eq!(info(&db, &tenant).await, before);
-    }
-
-    #[test]
-    fn accepts_only_plain_identifiers() {
-        assert!(check_name("t_acme_0a1b2c3d").is_ok());
-        for name in [
-            "",
-            "T_acme",
-            "t-acme",
-            "t acme",
-            "t`; REMOVE NAMESPACE x; --",
-        ] {
-            assert!(check_name(name).is_err(), "accepted {name:?}");
-        }
     }
 }

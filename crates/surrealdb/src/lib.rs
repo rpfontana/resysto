@@ -1,4 +1,4 @@
-//! SurrealDB access: the system connection, tenant provisioning and per-request record sessions.
+//! SurrealDB access: the system connection and per-request record sessions.
 
 mod page;
 mod schema;
@@ -104,10 +104,26 @@ impl Db {
         })
     }
 
-    async fn system_session(&self, database: &str) -> Result<Surreal<Any>, Error> {
+    /// Creates `database` if missing. Safe to repeat.
+    pub async fn define_database(&self, database: &str) -> Result<(), Error> {
+        check_name(database)?;
+        self.system
+            .query(format!("DEFINE DATABASE IF NOT EXISTS `{database}`"))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
+    /// A new session on `database` as the namespace user.
+    pub async fn system_session(&self, database: &str) -> Result<Surreal<Any>, Error> {
         let session: Surreal<Any> = self.system.clone();
         session.use_db(database).await?;
         Ok(session)
+    }
+
+    /// The SPKI PEM that each database's `app` access verifies record session tokens with.
+    pub fn verifying_key(&self) -> &str {
+        &self.verifying_key
     }
 
     /// A new record session on `database` as `user`, through the database's `app` access.
@@ -139,6 +155,19 @@ impl Db {
             &claims,
             &self.signing_key,
         )?)
+    }
+}
+
+// The name is interpolated into SurrealQL as an identifier.
+fn check_name(name: &str) -> Result<(), Error> {
+    let valid = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::InvalidName(name.to_owned()))
     }
 }
 
@@ -185,9 +214,21 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         .unwrap()
     }
 
+    // The migrator provisions real tenants; here only the `app` access is needed.
     pub(crate) async fn new_tenant(db: &Db) -> String {
         let name = format!("t_test_{}", Uuid::new_v4().simple());
-        db.provision_tenant(&name).await.unwrap();
+        db.define_database(&name).await.unwrap();
+        db.system_session(&name)
+            .await
+            .unwrap()
+            .query(format!(
+                "DEFINE ACCESS {ACCESS} ON DATABASE TYPE RECORD WITH JWT ALGORITHM ES256 KEY $key"
+            ))
+            .bind(("key", VERIFYING_KEY))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
         name
     }
 
@@ -255,5 +296,19 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
             .take(0)
             .unwrap();
         assert!(rows.is_empty(), "read {rows:?} from another tenant");
+    }
+
+    #[test]
+    fn accepts_only_plain_identifiers() {
+        assert!(check_name("t_acme_0a1b2c3d").is_ok());
+        for name in [
+            "",
+            "T_acme",
+            "t-acme",
+            "t acme",
+            "t`; REMOVE NAMESPACE x; --",
+        ] {
+            assert!(check_name(name).is_err(), "accepted {name:?}");
+        }
     }
 }
