@@ -27,6 +27,8 @@ struct ManifestFile {
 pub enum Error {
     #[error(transparent)]
     Db(#[from] resysto_surrealdb::Error),
+    #[error("schema file {path} builds an index CONCURRENTLY")]
+    ConcurrentIndex { path: &'static str },
     #[error("manifest {path}: {reason}")]
     InvalidManifest { path: &'static str, reason: String },
     #[error("manifest {path} changed after it was applied")]
@@ -108,8 +110,9 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
     }
 
     #[test]
-    fn every_manifest_of_the_lanes_loads() {
+    fn every_lane_passes_the_load_checks() {
         for lane in [&MASTER, &TENANT] {
+            migrate::check_schema(lane).unwrap();
             manifest::load(lane).unwrap();
         }
     }

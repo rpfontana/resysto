@@ -30,6 +30,7 @@ pub(crate) async fn migrate(
     lane: &Lane,
     params: &[(&str, &str)],
 ) -> Result<(), Error> {
+    check_schema(lane)?;
     let manifests = manifest::load(lane)?;
     db.query(MIGRATION_TABLE).await?.check()?;
     let done: Vec<Done> = db
@@ -67,6 +68,19 @@ pub(crate) async fn migrate(
         apply(db, lane, manifest, params).await?;
     }
     Ok(())
+}
+
+// A background UNIQUE build reports success, then rejects writes to its table on a duplicate.
+pub(crate) fn check_schema(lane: &Lane) -> Result<(), Error> {
+    let concurrent = lane.schema.iter().find(|file| {
+        file.sql
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|word| word.eq_ignore_ascii_case("concurrently"))
+    });
+    match concurrent {
+        Some(file) => Err(Error::ConcurrentIndex { path: file.path }),
+        None => Ok(()),
+    }
 }
 
 async fn apply(
@@ -269,6 +283,36 @@ mod tests {
             panic!("{info:?}")
         };
         fields.keys().cloned().collect()
+    }
+
+    #[test]
+    fn a_schema_file_with_a_concurrent_index_is_rejected() {
+        let check = |sql: &'static str| {
+            check_schema(&Lane {
+                schema: Vec::leak(vec![SchemaFile {
+                    path: "person.surql",
+                    sql,
+                }]),
+                manifests: &[],
+            })
+        };
+
+        for sql in [
+            "DEFINE INDEX OVERWRITE person_n ON person FIELDS n CONCURRENTLY;",
+            "define index person_n on person fields n concurrently;",
+        ] {
+            let result = check(sql);
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::ConcurrentIndex {
+                        path: "person.surql"
+                    })
+                ),
+                "accepted {sql}"
+            );
+        }
+        check("DEFINE FIELD OVERWRITE ran_concurrently ON person TYPE bool;").unwrap();
     }
 
     #[tokio::test]
