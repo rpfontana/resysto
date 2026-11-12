@@ -6,9 +6,13 @@ publish.workspace = true
 
 [dependencies]
 resysto-surrealdb = { path = "../surrealdb" }
+serde = { workspace = true, features = ["derive"] }
+sha2.workspace = true
+surrealdb.workspace = true
+thiserror.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
-surrealdb.workspace = true
 tokio.workspace = true
 
 [lints]

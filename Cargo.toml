@@ -41,6 +41,7 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
+toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde"] }
 tower-http = { version = "0.6.11", features = ["fs"] }
 surrealdb = "4.0.0"
 surrealdb-types = { version = "4.0.0", default-features = false }
