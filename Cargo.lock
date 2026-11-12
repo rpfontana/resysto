@@ -1938,10 +1938,12 @@ name = "resysto-surrealdb"
 version = "0.1.0"
 dependencies = [
  "jsonwebtoken",
+ "resysto-id",
  "serde",
  "surrealdb",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

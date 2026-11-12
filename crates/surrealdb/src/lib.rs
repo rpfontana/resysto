@@ -1,8 +1,10 @@
 //! SurrealDB access: the system connection, tenant provisioning and per-request record sessions.
 
+mod page;
 mod schema;
 mod transaction;
 
+pub use page::{Cursor, Page, PageRequest, page, write_in_batches};
 pub use transaction::{Tx, transaction};
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -56,6 +58,9 @@ pub enum Error {
     /// A [`transaction`] closure kept its [`Tx`] past the end of its future.
     #[error("transaction still in use after its closure finished")]
     TxInUse,
+    /// A [`page`] query returned a row without a UUID `id`, so there is no cursor to give.
+    #[error("page row without a uuid id")]
+    RowWithoutId,
 }
 
 #[derive(Serialize)]

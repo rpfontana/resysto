@@ -70,11 +70,12 @@ pub struct ApiResponse<T: Serialize> {
     pub data: T,
 }
 
+// resysto_surrealdb::Page, the shape of every list
 #[derive(Serialize)]
-pub struct PaginatedResponse<T: Serialize> {
+pub struct Page<T> {
     pub data: Vec<T>,
     /// Cursor for the next page; `None` on the last page.
-    pub next_cursor: Option<String>,
+    pub next_cursor: Option<Cursor>,
 }
 ```
 
@@ -84,51 +85,26 @@ Error responses use the format described in the [Error Handling](../core-pattern
 
 Every endpoint that returns a list of resources is paginated, with a cursor. Without pagination, one large dataset is enough for timeouts, out-of-memory errors, and unhappy consumers, and it's much easier to have it from the start than to bolt it on when a table has grown to a few hundred thousand rows.
 
-The client passes a cursor, the `next_cursor` of the last page it received, and the server returns the rows that come after it. The first request has no cursor.
+The client sends back `next_cursor` as `after`; `limit` defaults to 20, at most 200. A list query reads `type::record('<table>', $range)` and ends with `LIMIT $limit`; `resysto_surrealdb::page` binds both and returns `Page { data, next_cursor }`.
 
 ```rust
-#[derive(Debug, Deserialize)]
-pub struct PaginationParams {
-    /// The `next_cursor` of the previous page; absent on the first request.
-    pub after: Option<String>,
-    #[serde(default = "default_limit")]
-    pub limit: u32,
-}
+const LIST_USERS: &str = "
+    SELECT * FROM type::record('user', $range)
+    WHERE ($role = NONE OR role = $role)
+    LIMIT $limit
+";
 
-fn default_limit() -> u32 { 50 }
-
-async fn list_users(
-    State(state): State<AppState>,
-    Query(params): Query<PaginationParams>,
-) -> AppResult<Json<PaginatedResponse<UserResponse>>> {
-    let limit = params.limit.clamp(1, 200); // at least 1, at most 200
-
-    let (users, next_cursor) = state.user_service
-        .list(params.after.as_deref(), limit)
-        .await?;
-
-    Ok(Json(PaginatedResponse {
-        data: users.into_iter().map(Into::into).collect(),
-        next_cursor,
-    }))
-}
+let users: Page<UserRow> = page(
+    session.query(LIST_USERS).bind(("role", params.role)),
+    PageRequest { after: params.after, limit: params.limit },
+)
+.await?;
 ```
 
-The cursor is opaque to the client. For the default order it's the id of the last row: ids are UUID v7, unique and ordered by creation time, so `ORDER BY id` is the creation order. The repository asks SurrealDB for `limit + 1` rows; the extra row tells it whether there's a next page, and it never reaches the client.
-
-```sql
-DEFINE INDEX OVERWRITE user_cursor ON user FIELDS id;
-
--- First page
-SELECT * FROM user ORDER BY id LIMIT $limit;
-
--- Every page after it
-SELECT * FROM user WHERE id > $after ORDER BY id LIMIT $limit;
-```
-
-The index is what makes the cursor pay off: it turns the query into a range scan that starts at the cursor and stops after `$limit` rows, so the last page of a table costs the same as the first. Without it, the query reads the table from the first row. The first page is a statement of its own, because a single statement with `($after = NONE OR id > $after)` doesn't become a range on the index.
-
-The same cursor walks whole tables too: exports, recalculations, backfills and seeds read in pages, and a write that touches many rows goes in batches of ids read this way.
+- Rows come in id order, which for UUID v7 ids is creation order: no `ORDER BY`, no index on the cursor.
+- Every row must carry its `id`; the next cursor comes from it.
+- Don't page with `WHERE id > $after`: with filters other than plain comparisons it reads the table from its first row.
+- `resysto_surrealdb::write_in_batches` uses the same range to write or delete many rows.
 
 ### Why not offset
 
@@ -147,9 +123,8 @@ For list endpoints that need filtering, we accept filter parameters as query str
 ```rust
 #[derive(Debug, Deserialize)]
 pub struct UserListParams {
-    pub after: Option<String>,
-    #[serde(default = "default_limit")]
-    pub limit: u32,
+    pub after: Option<Cursor>,
+    pub limit: Option<u32>,
     pub role: Option<Role>,
     pub search: Option<String>,
     #[serde(default)]
@@ -167,7 +142,7 @@ pub enum UserSort {
 
 Sort orders are an enum, never a free field name, because each one needs its own index. The index ends with `id`, so the order is unique (`FIELDS name, id` for `Name`), and the cursor carries the values of the last row for every field in it.
 
-A filter clients use often gets an index that starts with the filtered field: with `FIELDS role, id`, `WHERE role = $role AND id > $after ORDER BY id` is still a range scan. A filter the index doesn't cover is applied during the scan, which reads index entries until `$limit` rows pass it. That's fine for a filter that discards few rows, and slow for one that discards almost all of them.
+A filter is applied while the range scan reads rows, until `$limit` of them pass it. That's fine for a filter that discards few rows, and slow for one that discards almost all of them: that one needs an index on the filtered field, checked with `EXPLAIN`.
 
 ## OpenAPI documentation
 

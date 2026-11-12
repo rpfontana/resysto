@@ -99,7 +99,6 @@ impl<T> Hash for Id<T> {
         self.key.hash(state);
     }
 }
-
 impl<T: Entity> fmt::Debug for Id<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", T::TABLE, self.key)
