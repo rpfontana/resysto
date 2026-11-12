@@ -79,10 +79,12 @@ impl<T> Page<T> {
 /// Runs a list query for one page, binding `$range` and `$limit`.
 ///
 /// ```surql
-/// SELECT * FROM type::record('person', $range) WHERE … LIMIT $limit
+/// LET $linked = $asset<-person_asset.in;
+/// SELECT * FROM type::record('person', $range) WHERE ($asset = NONE OR id IN $linked) LIMIT $limit
 /// ```
 ///
-/// Every row must carry its `id`: the next cursor is the id of the last one.
+/// The rows come from the last statement. Every row must carry its `id`: the next cursor is the
+/// id of the last one.
 ///
 /// # Errors
 ///
@@ -92,12 +94,13 @@ pub async fn page<T: SurrealValue>(
     request: PageRequest,
 ) -> Result<Page<T>, Error> {
     let limit = request.limit() as usize;
-    let mut rows: Vec<Value> = query
+    let mut response = query
         .bind(("range", after(request.after.map(Cursor::key))))
         .bind(("limit", i64::from(request.limit()) + 1))
         .await?
-        .check()?
-        .take(0)?;
+        .check()?;
+    let statement = response.num_statements().saturating_sub(1);
+    let mut rows: Vec<Value> = response.take(statement)?;
     let more = rows.len() > limit;
     rows.truncate(limit);
     let last = rows.last().map(cursor_of).transpose()?;
@@ -233,8 +236,10 @@ mod tests {
     async fn pages_return_every_matching_row_once_in_id_order() {
         let session = session_with_rows(100).await;
         // 40 rows pass, so the second page holds exactly `limit` rows and must be the last.
-        let list = "SELECT id, n FROM type::record('row', $range)
-                    WHERE ($min = NONE OR n >= $min) AND n % 2 = 0
+        // A LET before the list, as relation filters have: the rows come from the last statement.
+        let list = "LET $even = (SELECT VALUE id FROM row WHERE n % 2 = 0);
+                    SELECT id, n FROM type::record('row', $range)
+                    WHERE ($min = NONE OR n >= $min) AND id IN $even
                     LIMIT $limit";
 
         let mut seen = Vec::new();
