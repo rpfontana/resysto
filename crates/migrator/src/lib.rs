@@ -3,9 +3,12 @@
 mod manifest;
 mod migrate;
 
-use resysto_surrealdb::{Db, SchemaFile};
+use std::collections::BTreeSet;
 
-use crate::migrate::migrate;
+use futures_util::{StreamExt, stream};
+use resysto_surrealdb::{Config, Db, SchemaFile};
+
+use crate::migrate::{chain, migrate};
 
 const MASTER_DB: &str = "__master";
 
@@ -42,6 +45,12 @@ pub enum Error {
         step: usize,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    #[error("{name}: {reason}")]
+    Config { name: &'static str, reason: String },
+    #[error("database does not exist")]
+    MissingDatabase,
+    #[error("{} tenant migrations failed:{}", .0.len(), failures(.0))]
+    Tenants(Vec<(String, Error)>),
 }
 
 impl From<surrealdb::Error> for Error {
@@ -50,23 +59,114 @@ impl From<surrealdb::Error> for Error {
     }
 }
 
+fn failures(failed: &[(String, Error)]) -> String {
+    failed
+        .iter()
+        .map(|(database, error)| format!("\n  {database}: {}", chain(error)))
+        .collect()
+}
+
 /// Creates the master database if missing and applies the `master` lane. Safe to repeat.
 pub async fn provision_master(db: &Db) -> Result<(), Error> {
-    db.define_database(MASTER_DB).await?;
-    let session = db.system_session(MASTER_DB).await?;
-    migrate(&session, &MASTER, &[]).await
+    provision(db, MASTER_DB, &MASTER, &[]).await
 }
 
 /// Creates `database` if missing and applies the `tenant` lane. Safe to repeat.
 pub async fn provision_tenant(db: &Db, database: &str) -> Result<(), Error> {
-    db.define_database(database).await?;
+    provision(db, database, &TENANT, &[("access_key", db.verifying_key())]).await
+}
+
+pub async fn migrate_up() -> Result<(), Error> {
+    let name = "RESYSTO_MIGRATE__CONCURRENCY";
+    let concurrency = env_or(name, "4").parse().map_err(|_| Error::Config {
+        name,
+        reason: "not a number".into(),
+    })?;
+    let db = Db::connect(Config {
+        endpoint: env_or("RESYSTO_DB__ENDPOINT", "ws://127.0.0.1:18000"),
+        namespace: env_or("RESYSTO_DB__NAMESPACE", "resysto-dev"),
+        username: env_or("RESYSTO_DB__MIGRATOR_USER", "ns_migrator"),
+        password: env_or("RESYSTO_DB__MIGRATOR_PASSWORD", "migrator"),
+        signing_key: key_file("RESYSTO_AUTH__SIGNING_KEY_FILE")?,
+        verifying_key: key_file("RESYSTO_AUTH__VERIFYING_KEY_FILE")?,
+    })
+    .await?;
+    migrate_up_from(&db, MASTER_DB, concurrency).await?;
+    println!("migrations applied");
+    Ok(())
+}
+
+fn env_or(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
+fn key_file(name: &'static str) -> Result<String, Error> {
+    let path = std::env::var(name).map_err(|_| Error::Config {
+        name,
+        reason: "not set".into(),
+    })?;
+    std::fs::read_to_string(&path).map_err(|error| Error::Config {
+        name,
+        reason: format!("{path}: {error}"),
+    })
+}
+
+async fn migrate_up_from(db: &Db, master: &str, concurrency: usize) -> Result<(), Error> {
+    provision(db, master, &MASTER, &[]).await?;
+    let mut response = db
+        .system_session(master)
+        .await?
+        .query(
+            "SELECT VALUE db_name FROM tenant WHERE state IN ['ready', 'suspended'];
+             RETURN object::keys((INFO FOR NS).databases);",
+        )
+        .await?
+        .check()?;
+    let tenants: Vec<String> = response.take(0)?;
+    let databases: Vec<String> = response.take(1)?;
+    let databases: BTreeSet<String> = databases.into_iter().collect();
+    let mut failed: Vec<(String, Error)> = stream::iter(tenants)
+        .map(|database| {
+            let exists = databases.contains(&database);
+            async move {
+                // Opening a session would create the missing database empty.
+                let result = if exists {
+                    migrate_tenant(db, &database).await
+                } else {
+                    Err(Error::MissingDatabase)
+                };
+                (database, result)
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .filter_map(|(database, result)| async move { result.err().map(|error| (database, error)) })
+        .collect()
+        .await;
+    if failed.is_empty() {
+        return Ok(());
+    }
+    failed.sort_by(|a, b| a.0.cmp(&b.0));
+    Err(Error::Tenants(failed))
+}
+
+async fn migrate_tenant(db: &Db, database: &str) -> Result<(), Error> {
     let session = db.system_session(database).await?;
     migrate(&session, &TENANT, &[("access_key", db.verifying_key())]).await
 }
 
+async fn provision(
+    db: &Db,
+    database: &str,
+    lane: &Lane,
+    params: &[(&str, &str)],
+) -> Result<(), Error> {
+    db.define_database(database).await?;
+    let session = db.system_session(database).await?;
+    migrate(&session, lane, params).await
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
-    use resysto_surrealdb::Config;
     use surrealdb::types::{RecordId, Uuid, Value};
 
     use super::*;
@@ -132,6 +232,50 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
             .take(0)
             .unwrap();
         assert_eq!(auth, Some(user));
+    }
+
+    #[tokio::test]
+    async fn migrate_up_covers_ready_and_suspended_tenants_and_reports_each_failure() {
+        let db = connect().await;
+        let id = Uuid::new_v4().simple();
+        let master = format!("t_test_master_{id}");
+        let ready = format!("t_test_ready_{id}");
+        let suspended = format!("t_test_suspended_{id}");
+        let missing = format!("t_test_missing_{id}");
+        let deleted = format!("t_test_deleted_{id}");
+        for database in [&ready, &suspended] {
+            db.define_database(database).await.unwrap();
+        }
+        provision(&db, &master, &MASTER, &[]).await.unwrap();
+        db.system_session(&master)
+            .await
+            .unwrap()
+            .query(
+                "CREATE tenant SET db_name = $ready, state = 'ready';
+                 CREATE tenant SET db_name = $suspended, state = 'suspended';
+                 CREATE tenant SET db_name = $missing, state = 'ready';
+                 CREATE tenant SET db_name = $deleted, state = 'deleted';",
+            )
+            .bind(("ready", ready.clone()))
+            .bind(("suspended", suspended.clone()))
+            .bind(("missing", missing.clone()))
+            .bind(("deleted", deleted.clone()))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let result = migrate_up_from(&db, &master, 2).await;
+
+        let Err(Error::Tenants(failed)) = result else {
+            panic!("{result:?}")
+        };
+        let failed: Vec<&str> = failed.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(failed, [missing.as_str()]);
+        for database in [&ready, &suspended] {
+            let user = RecordId::new("account", Uuid::new_v7());
+            db.record_session(database, user).await.unwrap();
+        }
     }
 
     #[tokio::test]

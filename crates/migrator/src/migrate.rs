@@ -166,7 +166,7 @@ async fn run_step(
     Ok(())
 }
 
-fn chain(error: &Error) -> String {
+pub(crate) fn chain(error: &Error) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {
