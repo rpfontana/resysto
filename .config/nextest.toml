@@ -5,3 +5,10 @@ fail-fast = true
 slow-timeout = { period = "30s", terminate-after = 4 }
 failure-output = "immediate"
 success-output = "never"
+
+[test-groups]
+db = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = "rdeps(resysto-surrealdb)"
+test-group = "db"

@@ -1,6 +1,9 @@
 //! SurrealDB access: the system connection, tenant provisioning and per-request record sessions.
 
 mod schema;
+mod transaction;
+
+pub use transaction::{Tx, transaction};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -50,6 +53,9 @@ pub enum Error {
     /// A database name with characters outside `[a-z0-9_]`.
     #[error("invalid database name {0:?}")]
     InvalidName(String),
+    /// A [`transaction`] closure kept its [`Tx`] past the end of its future.
+    #[error("transaction still in use after its closure finished")]
+    TxInUse,
 }
 
 #[derive(Serialize)]
