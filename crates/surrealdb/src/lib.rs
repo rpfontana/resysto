@@ -5,6 +5,7 @@ mod schema;
 mod transaction;
 
 pub use page::{Cursor, Page, PageRequest, page, write_in_batches};
+pub use schema::{SchemaFile, apply_schema};
 pub use transaction::{Tx, transaction};
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -58,6 +59,12 @@ pub enum Error {
     /// A [`transaction`] closure kept its [`Tx`] past the end of its future.
     #[error("transaction still in use after its closure finished")]
     TxInUse,
+    /// The database rejected a schema file.
+    #[error("schema file {path} failed")]
+    Schema {
+        path: String,
+        source: Box<surrealdb::Error>,
+    },
     /// A [`page`] query returned a row without a UUID `id`, so there is no cursor to give.
     #[error("page row without a uuid id")]
     RowWithoutId,

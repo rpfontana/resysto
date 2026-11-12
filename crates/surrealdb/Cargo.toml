@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 jsonwebtoken.workspace = true
 serde = { workspace = true, features = ["derive"] }
+sha2.workspace = true
 surrealdb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -27,7 +27,7 @@ impl Tx {
     }
 }
 
-/// Runs `f` in a transaction on a clone of `session`, committing when it returns `Ok` and
+/// Runs `f` in a transaction on a clone of `db`, committing when it returns `Ok` and
 /// cancelling when it returns `Err`.
 ///
 /// A write conflict, from a statement or from the commit, cancels and reruns `f` from the start
@@ -39,14 +39,14 @@ impl Tx {
 /// The error `f` returns, the last conflict when every attempt conflicts, a database error
 /// while opening or committing, or [`Error::TxInUse`] when `f` keeps its [`Tx`] past the end
 /// of its future.
-pub async fn transaction<T, F, Fut>(session: &Surreal<Any>, mut f: F) -> Result<T, Error>
+pub async fn transaction<T, F, Fut>(db: &Surreal<Any>, mut f: F) -> Result<T, Error>
 where
     F: FnMut(Tx) -> Fut,
     Fut: Future<Output = Result<T, Error>>,
 {
     let mut waits = BACKOFF.into_iter();
     loop {
-        match attempt(session, &mut f).await {
+        match attempt(db, &mut f).await {
             Err(error) if is_conflict(&error) => match waits.next() {
                 Some(wait) => tokio::time::sleep(wait).await,
                 None => return Err(error),
@@ -56,12 +56,12 @@ where
     }
 }
 
-async fn attempt<T, F, Fut>(session: &Surreal<Any>, f: &mut F) -> Result<T, Error>
+async fn attempt<T, F, Fut>(db: &Surreal<Any>, f: &mut F) -> Result<T, Error>
 where
     F: FnMut(Tx) -> Fut,
     Fut: Future<Output = Result<T, Error>>,
 {
-    let tx = Arc::new(session.clone().begin().await?);
+    let tx = Arc::new(db.clone().begin().await?);
     let outcome = f(Tx(Arc::clone(&tx))).await;
     let tx = Arc::into_inner(tx).ok_or(Error::TxInUse)?;
     match outcome {

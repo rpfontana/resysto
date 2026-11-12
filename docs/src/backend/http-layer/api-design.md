@@ -95,7 +95,7 @@ const LIST_USERS: &str = "
 ";
 
 let users: Page<UserRow> = page(
-    session.query(LIST_USERS).bind(("role", params.role)),
+    db.query(LIST_USERS).bind(("role", params.role)),
     PageRequest { after: params.after, limit: params.limit },
 )
 .await?;

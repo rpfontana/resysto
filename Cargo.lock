@@ -1940,6 +1940,7 @@ dependencies = [
  "jsonwebtoken",
  "resysto-id",
  "serde",
+ "sha2",
  "surrealdb",
  "thiserror",
  "tokio",
