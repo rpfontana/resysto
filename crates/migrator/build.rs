@@ -36,7 +36,7 @@ fn lane(name: &str, dir: &Path) -> io::Result<String> {
     ))
 }
 
-// Adding or removing a file changes its directory's mtime
+// adding or removing a file changes its directory's mtime
 fn rerun_if_changed(dir: &Path) {
     println!("cargo:rerun-if-changed={}", dir.display());
 }

@@ -1,4 +1,4 @@
-//! SurrealDB access: the system connection and per-request record sessions.
+//! SurrealDB access: the system connection and per-request record sessions
 
 mod page;
 mod schema;
@@ -21,23 +21,23 @@ use surrealdb::types::{RecordId, ToSql};
 const ACCESS: &str = "app";
 const TOKEN_TTL_SECS: u64 = 15 * 60;
 
-/// Connection settings.
+/// Connection settings
 pub struct Config {
-    /// Server endpoint, such as `ws://127.0.0.1:18000`.
+    /// Server endpoint, such as `ws://127.0.0.1:18000`
     pub endpoint: String,
-    /// Namespace holding the master and tenant databases.
+    /// Namespace holding the master and tenant databases
     pub namespace: String,
-    /// Namespace user with the `OWNER` role.
+    /// Namespace user with the `OWNER` role
     pub username: String,
-    /// Password of `username`.
+    /// Password of `username`
     pub password: SecretString,
-    /// PKCS#8 PEM of the ES256 key that signs record session tokens.
+    /// PKCS#8 PEM of the ES256 key that signs record session tokens
     pub signing_key: SecretString,
-    /// SPKI PEM of the matching public key, stored in each database's `app` access.
+    /// SPKI PEM of the matching public key, stored in each database's `app` access
     pub verifying_key: String,
 }
 
-/// A connection signed in as the namespace user.
+/// A connection signed in as the namespace user
 pub struct Db {
     system: Surreal<Any>,
     namespace: String,
@@ -45,28 +45,28 @@ pub struct Db {
     verifying_key: String,
 }
 
-/// Errors returned by [`Db`].
+/// Errors returned by [`Db`]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The database rejected the request.
+    /// The database rejected the request
     #[error(transparent)]
     Db(#[from] surrealdb::Error),
-    /// The signing key is invalid.
+    /// The signing key is invalid
     #[error(transparent)]
     Token(#[from] jsonwebtoken::errors::Error),
-    /// A database name with characters outside `[a-z0-9_]`.
+    /// A database name with characters outside `[a-z0-9_]`
     #[error("invalid database name {0:?}")]
     InvalidName(String),
-    /// A [`transaction`] closure kept its [`Tx`] past the end of its future.
+    /// A [`transaction`] closure kept its [`Tx`] past the end of its future
     #[error("transaction still in use after its closure finished")]
     TxInUse,
-    /// The database rejected a schema file.
+    /// The database rejected a schema file
     #[error("schema file {path} failed")]
     Schema {
         path: String,
         source: Box<surrealdb::Error>,
     },
-    /// A [`page`] query returned a row without a UUID `id`, so there is no cursor to give.
+    /// A [`page`] query returned a row without a UUID `id`
     #[error("page row without a uuid id")]
     RowWithoutId,
 }
@@ -86,7 +86,7 @@ struct Claims<'a> {
 }
 
 impl Db {
-    /// Connects and signs in as the namespace user.
+    /// Connects and signs in as the namespace user
     pub async fn connect(config: Config) -> Result<Self, Error> {
         let system = any::connect(config.endpoint).await?;
         system
@@ -105,7 +105,7 @@ impl Db {
         })
     }
 
-    /// Creates `database` if missing. Safe to repeat.
+    /// Creates `database` if missing
     pub async fn define_database(&self, database: &str) -> Result<(), Error> {
         check_name(database)?;
         self.system
@@ -115,19 +115,19 @@ impl Db {
         Ok(())
     }
 
-    /// A new session on `database` as the namespace user.
+    /// A new session on `database` as the namespace user
     pub async fn system_session(&self, database: &str) -> Result<Surreal<Any>, Error> {
         let session: Surreal<Any> = self.system.clone();
         session.use_db(database).await?;
         Ok(session)
     }
 
-    /// The SPKI PEM that each database's `app` access verifies record session tokens with.
+    /// The SPKI PEM that each database's `app` access verifies record session tokens with
     pub fn verifying_key(&self) -> &str {
         &self.verifying_key
     }
 
-    /// A new record session on `database` as `user`, through the database's `app` access.
+    /// A new record session on `database` as `user`, through the database's `app` access
     pub async fn record_session(
         &self,
         database: &str,
@@ -159,7 +159,7 @@ impl Db {
     }
 }
 
-// The name is interpolated into SurrealQL as an identifier.
+// the name is interpolated into SurrealQL as an identifier
 fn check_name(name: &str) -> Result<(), Error> {
     let valid = !name.is_empty()
         && name
@@ -178,7 +178,7 @@ pub(crate) mod tests {
 
     use super::*;
 
-    // Test-only key pair.
+    // test-only key pair
     const SIGNING_KEY: &str = "-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgCcu34KTFnm0J5qWJ
 AxhAcHSbqFj+B/am0htHlDufqWihRANCAASN/BWdDI7GaVVD6HAh20C4ZzJSHSsz
@@ -215,7 +215,7 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         .unwrap()
     }
 
-    // The migrator provisions real tenants; here only the `app` access is needed.
+    // the migrator provisions real tenants; here only the `app` access is needed
     pub(crate) async fn new_tenant(db: &Db) -> String {
         let name = format!("t_test_{}", Uuid::new_v4().simple());
         db.define_database(&name).await.unwrap();
@@ -258,7 +258,7 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
 
         assert_eq!(whoami(&as_alice).await, (Some(alice), Some(tenant.clone())));
         assert_eq!(whoami(&as_bob).await, (Some(bob), Some(tenant.clone())));
-        // A record user can't read INFO, so this fails if a record session took over the system one.
+        // a record user can't read INFO, so this fails if a record session took over the system one
         info(&db, &tenant).await;
     }
 

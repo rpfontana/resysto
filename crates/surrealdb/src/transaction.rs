@@ -9,7 +9,7 @@ use surrealdb::types::QueryError;
 
 use crate::Error;
 
-/// Waits before each rerun after a write conflict, so five attempts in all.
+/// Waits before each rerun after a write conflict, so five attempts in all
 const BACKOFF: [Duration; 4] = [
     Duration::from_millis(20),
     Duration::from_millis(40),
@@ -17,28 +17,18 @@ const BACKOFF: [Duration; 4] = [
     Duration::from_millis(160),
 ];
 
-/// The open transaction handed to the closure of [`transaction`].
+/// The open transaction handed to the closure of [`transaction`]
 pub struct Tx(Arc<Transaction<Any>>);
 
 impl Tx {
-    /// Runs `sql` inside the transaction.
+    /// Runs `sql` inside the transaction
     pub fn query<'tx>(&'tx self, sql: impl Into<Cow<'tx, str>>) -> Query<'tx, Any> {
         self.0.query(sql)
     }
 }
 
-/// Runs `f` in a transaction on a clone of `db`, committing when it returns `Ok` and
-/// cancelling when it returns `Err`.
-///
-/// A write conflict, from a statement or from the commit, cancels and reruns `f` from the start
-/// after a short wait, up to five attempts in all; any other error is returned at once. `f`
-/// therefore runs more than once and must have no effect outside the database.
-///
-/// # Errors
-///
-/// The error `f` returns, the last conflict when every attempt conflicts, a database error
-/// while opening or committing, or [`Error::TxInUse`] when `f` keeps its [`Tx`] past the end
-/// of its future.
+/// Runs `f` in a transaction, committing on `Ok` and cancelling on `Err`; a write conflict
+/// reruns `f`, so it must have no effect outside the database
 pub async fn transaction<T, F, Fut>(db: &Surreal<Any>, mut f: F) -> Result<T, Error>
 where
     F: FnMut(Tx) -> Fut,
@@ -70,7 +60,7 @@ where
             Ok(value)
         }
         Err(error) => {
-            // A cancel that fails still rolls back when its future is dropped.
+            // a cancel that fails still rolls back when its future is dropped
             let _ = tx.cancel().await;
             Err(error)
         }
@@ -103,7 +93,7 @@ mod tests {
             .check()
             .unwrap();
 
-        // Spawned so that the test stops compiling if the future is not Send.
+        // spawned so that the test stops compiling if the future is not Send
         let task = tokio::spawn(async move {
             let attempts = AtomicUsize::new(0);
             let outcome = transaction(&session, |tx| {

@@ -23,8 +23,7 @@ struct Done {
     hash: String,
 }
 
-/// Applies the schema files, then each pending manifest. A failed manifest is retried from its
-/// first step on the next run.
+/// Applies the schema files, then the pending manifests; a failed one restarts from step one
 pub(crate) async fn migrate(
     db: &Surreal<Any>,
     lane: &Lane,
@@ -56,7 +55,7 @@ pub(crate) async fn migrate(
             None => pending.push(manifest),
         }
     }
-    // Files cited by a pending manifest are applied by its schema step.
+    // files cited by a pending manifest are applied by its schema step
     let files: Vec<SchemaFile> = lane
         .schema
         .iter()
@@ -70,7 +69,7 @@ pub(crate) async fn migrate(
     Ok(())
 }
 
-// A background UNIQUE build reports success, then rejects writes to its table on a duplicate.
+// a background UNIQUE build reports success, then rejects writes to its table on a duplicate
 pub(crate) fn check_schema(lane: &Lane) -> Result<(), Error> {
     let concurrent = lane.schema.iter().find(|file| {
         file.sql
@@ -317,7 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_manifest_runs_once_and_then_neither_changes_nor_gets_an_older_one_before_it() {
-        // Batches of 500, 500 and 200.
+        // batches of 500, 500 and 200
         let emails: Vec<String> = (0..1200).map(|n| format!("P{n}@X.IT")).collect();
         let db = people(&emails).await;
 

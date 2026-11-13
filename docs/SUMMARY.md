@@ -13,3 +13,8 @@
   - [Request Validation](./src/backend/http-layer/validation.md)
   - [Authentication and Authorization](./src/backend/http-layer/authentication.md)
   - [API Design](./src/backend/http-layer/api-design.md)
+
+# Reference
+
+- [Comments](./src/reference/comments.md)
+- [Commits](./src/reference/commits.md)

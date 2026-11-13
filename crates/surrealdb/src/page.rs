@@ -9,17 +9,17 @@ use uuid::Uuid;
 
 use crate::Error;
 
-/// Rows in a page when the caller asks for no size.
+/// Rows in a page when the caller asks for no size
 const DEFAULT_LIMIT: u32 = 20;
-/// The most rows a page holds, whatever the caller asks.
+/// The most rows a page holds, whatever the caller asks
 const MAX_LIMIT: u32 = 200;
 
-/// The page a caller asks for.
+/// The page a caller asks for
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub struct PageRequest {
-    /// The `next_cursor` of the previous page; absent on the first one.
+    /// The `next_cursor` of the previous page; absent on the first one
     pub after: Option<Cursor>,
-    /// Rows wanted: 20 when absent, at least 1 and at most 200.
+    /// Rows wanted: 20 when absent, at least 1 and at most 200
     pub limit: Option<u32>,
 }
 
@@ -29,9 +29,7 @@ impl PageRequest {
     }
 }
 
-/// Where a page starts: the id of the last row of the page before it.
-///
-/// Travels as a plain UUID string; clients pass it back without reading it.
+/// Where a page starts: the id of the last row of the page before it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor(Uuid);
 
@@ -58,16 +56,16 @@ impl fmt::Display for InvalidCursor {
     }
 }
 
-/// One page of rows, and where the next one starts.
+/// One page of rows, and where the next one starts
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Page<T> {
     pub data: Vec<T>,
-    /// `None` on the last page.
+    /// `None` on the last page
     pub next_cursor: Option<Cursor>,
 }
 
 impl<T> Page<T> {
-    /// Converts every row, keeping the cursor.
+    /// Converts every row, keeping the cursor
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> Page<U> {
         Page {
             data: self.data.into_iter().map(f).collect(),
@@ -76,19 +74,8 @@ impl<T> Page<T> {
     }
 }
 
-/// Runs a list query for one page, binding `$range` and `$limit`.
-///
-/// ```surql
-/// LET $linked = $asset<-person_asset.in;
-/// SELECT * FROM type::record('person', $range) WHERE ($asset = NONE OR id IN $linked) LIMIT $limit
-/// ```
-///
-/// The rows come from the last statement. Every row must carry its `id`: the next cursor is the
-/// id of the last one.
-///
-/// # Errors
-///
-/// A database error, a row that does not convert to `T`, or [`Error::RowWithoutId`].
+/// Runs a list query for one page, binding `$range` and `$limit`; the rows come from the last
+/// statement, so a `LET` can come first, and every row must carry its `id`
 pub async fn page<T: SurrealValue>(
     query: Query<'_, Any>,
     request: PageRequest,
@@ -114,18 +101,14 @@ pub async fn page<T: SurrealValue>(
     })
 }
 
-/// Runs a batch query until a batch comes back short, binding `$range` and `$limit`; returns
-/// how many records the batches held.
+/// Runs a batch query, binding `$range` and `$limit`, until a batch comes back short; the last
+/// statement must return the batch's ids
 ///
 /// ```surql
 /// LET $batch = (SELECT VALUE id FROM type::record('person', $range) WHERE … LIMIT $limit);
-/// UPDATE $batch SET … RETURN NONE;   -- or DELETE $batch
+/// UPDATE $batch SET … RETURN NONE;
 /// RETURN $batch;
 /// ```
-///
-/// # Errors
-///
-/// A database error, or a last statement that does not return record ids.
 pub async fn write_in_batches<'a>(
     limit: u32,
     mut query: impl FnMut() -> Query<'a, Any>,
@@ -235,8 +218,8 @@ mod tests {
     #[tokio::test]
     async fn pages_return_every_matching_row_once_in_id_order() {
         let session = session_with_rows(100).await;
-        // 40 rows pass, so the second page holds exactly `limit` rows and must be the last.
-        // A LET before the list, as relation filters have: the rows come from the last statement.
+        // 40 rows pass, so the second page holds exactly `limit` rows and must be the last
+        // a LET before the list, as relation filters have: the rows come from the last statement
         let list = "LET $even = (SELECT VALUE id FROM row WHERE n % 2 = 0);
                     SELECT id, n FROM type::record('row', $range)
                     WHERE ($min = NONE OR n >= $min) AND id IN $even
@@ -281,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn batches_write_every_matching_record_once() {
         let session = session_with_rows(45).await;
-        // The filter still matches what the batch wrote: only the range keeps it from coming back.
+        // the filter still matches what the batch wrote: only the range keeps it from coming back
         let sql = "LET $batch = (SELECT VALUE id FROM type::record('row', $range)
                                  WHERE n % 2 = 0 LIMIT $limit);
                    UPDATE $batch SET hits += 1 RETURN NONE;

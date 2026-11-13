@@ -42,7 +42,7 @@ pub(crate) struct Data {
     pub(crate) batch: u32,
 }
 
-/// The `REMOVE … IF EXISTS` statement built from a `remove` step.
+/// The `REMOVE … IF EXISTS` statement built from a `remove` step
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "RemoveSpec")]
 pub(crate) struct Remove(pub(crate) String);
@@ -136,7 +136,7 @@ fn check(lane: &Lane, section: &str, step: &Step) -> Result<(), String> {
         Step::Data(data) if !(data.sql.contains("$range") && data.sql.contains("$limit")) => {
             Err("data must read $range and $limit".into())
         }
-        // Without a final RETURN of the ids, write_in_batches stops after one batch.
+        // without a final RETURN of the ids, write_in_batches stops after one batch
         Step::Data(data) if !last_statement_is_return(&data.sql) => {
             Err("data must end with a RETURN of the batch's ids".into())
         }

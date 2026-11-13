@@ -1,4 +1,4 @@
-//! Entity-typed UUID v7 identifiers.
+//! Entity-typed UUID v7 identifiers
 
 use std::cmp::Ordering;
 use std::error::Error;
@@ -10,32 +10,19 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-/// A type stored in its own table.
-///
-/// ```rust
-/// # use resysto_id::{Entity, Id};
-/// pub enum Person {}
-///
-/// impl Entity for Person {
-///     const TABLE: &'static str = "person";
-/// }
-///
-/// pub type PersonId = Id<Person>;
-/// ```
+/// A type stored in its own table
 pub trait Entity: 'static {
-    /// Table name.
+    /// Table name
     const TABLE: &'static str;
 }
 
-/// UUID v7 identifier of a `T` record.
-///
-/// Serialized as a plain UUID string. Parsing rejects other UUID versions.
+/// UUID v7 identifier of a `T` record
 pub struct Id<T> {
     key: Uuid,
     kind: PhantomData<fn() -> T>,
 }
 
-/// The error returned when converting to an [`Id`] fails.
+/// A value that is not a valid [`Id`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ParseIdError;

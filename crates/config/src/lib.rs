@@ -1,4 +1,4 @@
-//! Process settings from `RESYSTO_*` environment variables.
+//! Process settings from `RESYSTO_*` environment variables
 
 use std::{env, fs, io};
 

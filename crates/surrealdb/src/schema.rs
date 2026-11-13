@@ -5,10 +5,10 @@ use surrealdb::types::SurrealValue;
 
 use crate::Error;
 
-/// A `.surql` file of a lane, embedded in the binary.
+/// A `.surql` file of a lane, embedded in the binary
 #[derive(Debug, Clone, Copy)]
 pub struct SchemaFile {
-    /// Path inside the lane's `schema/` folder, and the key of the file's row in `__schema_file`.
+    /// Path inside the lane's `schema/` folder, and the key of the file's row in `__schema_file`
     pub path: &'static str,
     pub sql: &'static str,
 }
@@ -25,15 +25,14 @@ struct Applied {
     hash: String,
 }
 
-/// Applies, in order, the files whose text or parameters changed since they were last applied
-/// to `db`, and returns their paths.
+/// Applies the files whose text or parameters changed since the last run and returns their paths
 pub async fn apply_schema(
     db: &Surreal<Any>,
     files: &[SchemaFile],
     params: &[(&str, &str)],
 ) -> Result<Vec<&'static str>, Error> {
     db.query(SCHEMA_FILE_TABLE).await?.check()?;
-    // One row per file of the lane.
+    // unpaged: the table holds one row per schema file
     let applied: Vec<Applied> = db
         .query("SELECT record::id(id) AS path, hash FROM __schema_file")
         .await?
