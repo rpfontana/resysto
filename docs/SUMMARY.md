@@ -6,6 +6,7 @@
 
 - [Core Patterns](./src/backend/core-patterns/README.md)
   - [Error Handling](./src/backend/core-patterns/error-handling.md)
+  - [Configuration](./src/backend/core-patterns/configuration.md)
 - [HTTP Layer](./src/backend/http-layer/README.md)
   - [Routing and Handlers](./src/backend/http-layer/routing-and-handlers.md)
   - [Middleware](./src/backend/http-layer/middleware.md)
