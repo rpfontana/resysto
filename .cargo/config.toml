@@ -1,0 +1,11 @@
+[env]
+RESYSTO_ADDR = "127.0.0.1:3000"
+RESYSTO_SITE = { value = "web/build", relative = true }
+
+RESYSTO_DB__ENDPOINT = "ws://127.0.0.1:18000"
+RESYSTO_DB__NAMESPACE = "resysto-dev"
+RESYSTO_DB__MIGRATOR_USER = "ns_migrator"
+RESYSTO_DB__MIGRATOR_PASSWORD_FILE = { value = ".secrets/db_migrator_password", relative = true }
+
+RESYSTO_AUTH__SIGNING_KEY_FILE = { value = ".secrets/auth_signing_key.pem", relative = true }
+RESYSTO_AUTH__VERIFYING_KEY_FILE = { value = ".secrets/auth_verifying_key.pem", relative = true }

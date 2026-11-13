@@ -22,6 +22,7 @@ async fn main() -> ExitCode {
             command: Migrate::Up,
         } => resysto_migrator::migrate_up().await.map_err(Into::into),
     };
+
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

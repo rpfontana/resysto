@@ -6,7 +6,9 @@ publish.workspace = true
 
 [dependencies]
 futures-util.workspace = true
+resysto-config = { path = "../config" }
 resysto-surrealdb = { path = "../surrealdb" }
+secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true
 surrealdb.workspace = true

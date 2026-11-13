@@ -489,6 +489,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "config"
+version = "0.15.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38e9fbc53afcec54441422f1c596cd054655b32e70e1cbac956651b7b175a404"
+dependencies = [
+ "pathdiff",
+ "serde_core",
+ "winnow",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1624,6 +1635,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
 name = "pbkdf2"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2033,6 +2050,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resysto-config"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "resysto-id"
 version = "0.1.0"
 dependencies = [
@@ -2047,7 +2073,9 @@ name = "resysto-migrator"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "resysto-config",
  "resysto-surrealdb",
+ "secrecy",
  "serde",
  "sha2",
  "surrealdb",
@@ -2061,6 +2089,8 @@ name = "resysto-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "resysto-config",
+ "serde",
  "tokio",
  "tower-http",
 ]
@@ -2071,6 +2101,7 @@ version = "0.1.0"
 dependencies = [
  "jsonwebtoken",
  "resysto-id",
+ "secrecy",
  "serde",
  "sha2",
  "surrealdb",
@@ -2352,6 +2383,16 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "serde",
+ "zeroize",
+]
 
 [[package]]
 name = "security-framework"

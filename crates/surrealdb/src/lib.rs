@@ -11,6 +11,7 @@ pub use transaction::{Tx, transaction};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::{self, Any};
@@ -29,9 +30,9 @@ pub struct Config {
     /// Namespace user with the `OWNER` role.
     pub username: String,
     /// Password of `username`.
-    pub password: String,
+    pub password: SecretString,
     /// PKCS#8 PEM of the ES256 key that signs record session tokens.
-    pub signing_key: String,
+    pub signing_key: SecretString,
     /// SPKI PEM of the matching public key, stored in each database's `app` access.
     pub verifying_key: String,
 }
@@ -92,14 +93,14 @@ impl Db {
             .signin(Namespace {
                 namespace: config.namespace.clone(),
                 username: config.username,
-                password: config.password,
+                password: config.password.expose_secret().to_owned(),
             })
             .await?;
         system.use_ns(&config.namespace).await?;
         Ok(Self {
             system,
             namespace: config.namespace,
-            signing_key: EncodingKey::from_ec_pem(config.signing_key.as_bytes())?,
+            signing_key: EncodingKey::from_ec_pem(config.signing_key.expose_secret().as_bytes())?,
             verifying_key: config.verifying_key,
         })
     }

@@ -1,5 +1,7 @@
 //! The HTTP application.
 
+mod settings;
+
 use std::future;
 use std::io;
 
@@ -8,20 +10,17 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::settings::Settings;
+
 /// Serves the application on `RESYSTO_ADDR` until Ctrl+C or SIGTERM, then lets open requests
 /// finish. The SPA comes from `RESYSTO_SITE`.
 pub async fn serve() -> io::Result<()> {
-    let addr = env_or("RESYSTO_ADDR", "127.0.0.1:3000");
-    let site = env_or("RESYSTO_SITE", "web/build");
+    let Settings { addr, site } = resysto_config::load().map_err(io::Error::other)?;
     let listener = TcpListener::bind(&addr).await?;
     println!("listening on http://{addr}");
     axum::serve(listener, router(&site))
         .with_graceful_shutdown(shutdown_signal())
         .await
-}
-
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
 }
 
 // A path that is not a file under `site` gets its `200.html`.
