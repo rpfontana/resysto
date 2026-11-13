@@ -70,7 +70,7 @@ pub struct ApiResponse<T: Serialize> {
     pub data: T,
 }
 
-// resysto_surrealdb::Page, the shape of every list
+// The shape of every list
 #[derive(Serialize)]
 pub struct Page<T> {
     pub data: Vec<T>,
@@ -83,34 +83,27 @@ Error responses use the format described in the [Error Handling](../core-pattern
 
 ## Pagination
 
-Every endpoint that returns a list of resources is paginated, with a cursor. Without pagination, one large dataset is enough for timeouts, out-of-memory errors, and unhappy consumers, and it's much easier to have it from the start than to bolt it on when a table has grown to a few hundred thousand rows.
+Every endpoint that returns a list is paginated, from the first version. A list without pagination works until one table grows to a few hundred thousand rows; then it times out or runs out of memory, and adding pagination at that point breaks every client.
 
-The client sends back `next_cursor` as `after`; `limit` defaults to 20, at most 200. A list query reads `type::record('<table>', $range)` and ends with `LIMIT $limit`; `resysto_surrealdb::page` binds both and returns `Page { data, next_cursor }`.
+We paginate with a cursor (keyset pagination). A page ends with `next_cursor`, and the client sends it back as `after` to get the next one, until `next_cursor` is `null`. `limit` defaults to 20 and is capped at 200.
 
-```rust
-const LIST_USERS: &str = "
-    SELECT * FROM type::record('user', $range)
-    WHERE ($role = NONE OR role = $role)
-    LIMIT $limit
-";
+```
+GET /api/v1/users?limit=20
+-> { "data": [ ...20 users... ], "next_cursor": "0193a2f4-..." }
 
-let users: Page<UserRow> = page(
-    db.query(LIST_USERS).bind(("role", params.role)),
-    PageRequest { after: params.after, limit: params.limit },
-)
-.await?;
+GET /api/v1/users?limit=20&after=0193a2f4-...
+-> { "data": [ ...7 users... ], "next_cursor": null }
 ```
 
-- Rows come in id order, which for UUID v7 ids is creation order: no `ORDER BY`, no index on the cursor.
-- Every row must carry its `id`; the next cursor comes from it.
-- Don't page with `WHERE id > $after`: with filters other than plain comparisons it reads the table from its first row.
-- `resysto_surrealdb::write_in_batches` uses the same range to write or delete many rows.
+The cursor is the id of the last row on the page. Ids are time-ordered UUID v7, so rows come in creation order and the next page starts right after the cursor: the database jumps to it instead of reading and skipping the rows before. Clients treat the cursor as opaque: they pass it back unchanged and never build one.
+
+List queries don't handle cursors by hand: the database crate has a helper that applies `after` and `limit` and returns `data` with `next_cursor`.
 
 ### Why not offset
 
 Offset-based pagination (`LIMIT $n START $offset`) is the simplest approach, and it's what lets a UI jump to page 37 and show "page 37 of 120". It doesn't work with the amount of data resysto reads:
 
-- **Every page costs more than the one before.** SurrealDB applies `START` to the stream of rows the scan produces, so the skipped rows are read and thrown away. Page 5,000 of 200 rows reads a million rows, and walking a whole table page by page is quadratic.
+- **Every page costs more than the one before.** The database reads the skipped rows and throws them away. Page 5,000 of 200 rows reads a million rows, and walking a whole table page by page is quadratic.
 - **The total is a full read.** "Page X of Y" needs `count()` over every row that matches the filter, on every request.
 - **Concurrent writes move the pages.** A row inserted or deleted between two requests shifts every later page, so the client skips rows or sees them twice at the boundary.
 

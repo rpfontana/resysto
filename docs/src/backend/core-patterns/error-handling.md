@@ -189,9 +189,9 @@ We use two different error crates. They serve complementary purposes, and the ba
 
 **thiserror** is for errors that the code needs to match on. It generates `Display` and `Error` trait implementations from the enum definitions. We use it for domain errors (`CreateUserError`, `AuthError`), for the `AppError` enum, and for any error type where callers need to distinguish between variants and react differently.
 
-**anyhow** is for errors that the code just needs to propagate. It gives you a single `anyhow::Error` type that can hold any error, along with context messages that form a chain explaining what went wrong. We use it for the catch-all `Internal` variant of `AppError`, and in infrastructure code where we want to add context without defining a new error variant for every possible failure mode.
+**anyhow** is for errors that the code just needs to propagate. It gives you a single `anyhow::Error` type that can hold any error, along with context messages that form a chain explaining what went wrong. We use it in binaries, where an error is only reported (`main` returns `anyhow::Result<()>`), and for the catch-all `Internal` variant of `AppError`.
 
-The rule: use `thiserror` at boundaries where callers need to make decisions based on the error variant, and use `anyhow` for the "everything else" case where the error just needs to be logged and reported.
+The rule: library crates define their own error enums with `thiserror`, because their callers need to make decisions based on the variant; `anyhow` is for the "everything else" case where the error just needs to be logged and reported.
 
 ## Adding context with anyhow
 
@@ -199,16 +199,14 @@ The `anyhow::Context` trait attaches human-readable context to errors as they pr
 
 ```rust
 use anyhow::Context;
-use resysto_surrealdb::{Config, Db};
 
-pub async fn connect_db(config: Config) -> anyhow::Result<Db> {
-    Db::connect(config)
-        .await
-        .context("failed to connect to SurrealDB")
+fn load_template(path: &Path) -> anyhow::Result<String> {
+    std::fs::read_to_string(path)
+        .with_context(|| format!("reading template {}", path.display()))
 }
 ```
 
-When this error gets logged, the output will include both the original error ("connection refused") and the context ("failed to connect to SurrealDB"). That's the difference between staring at a cryptic error message and immediately knowing where to look.
+When this error gets logged, the output will include both the original error ("No such file or directory") and the context ("reading template invoice.html"). That's the difference between staring at a cryptic error message and immediately knowing where to look.
 
 ## Rules
 
@@ -220,4 +218,4 @@ When this error gets logged, the output will include both the original error ("c
 
 **Use `#[from]` for automatic conversions.** The `thiserror` `#[from]` attribute generates `From` implementations that let the `?` operator convert errors automatically. This keeps handler code clean and focused on the happy path.
 
-**Add context with `.context()` liberally in infrastructure code.** The small cost of writing a context string pays off enormously when someone is debugging something in production at 2 AM and the error log says "failed to persist user registration" instead of just "connection reset by peer".
+**Add context with `.context()` liberally wherever an error becomes `anyhow`.** The small cost of writing a context string pays off enormously when someone is debugging something in production at 2 AM and the error log says "failed to persist user registration" instead of just "connection reset by peer".
