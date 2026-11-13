@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
 resysto-migrator = { path = "../migrator" }
 resysto-server = { path = "../server" }
