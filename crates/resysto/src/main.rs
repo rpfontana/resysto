@@ -18,6 +18,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Migrate {
             command: Migrate::Up,
         } => resysto_migrator::migrate_up().await?,
+        Command::Migrate {
+            command: Migrate::Plan,
+        } => resysto_migrator::migrate_plan().await?,
     }
     Ok(())
 }

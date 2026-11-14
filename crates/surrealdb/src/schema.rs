@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb::types::SurrealValue;
+use surrealdb::types::{QueryError, SurrealValue};
 
 use crate::Error;
 
@@ -32,21 +32,8 @@ pub async fn apply_schema(
     params: &[(&str, &str)],
 ) -> Result<Vec<&'static str>, Error> {
     db.query(SCHEMA_FILE_TABLE).await?.check()?;
-    // unpaged: the table holds one row per schema file
-    let applied: Vec<Applied> = db
-        .query("SELECT record::id(id) AS path, hash FROM __schema_file")
-        .await?
-        .check()?
-        .take(0)?;
     let mut ran = Vec::new();
-    for file in files {
-        let hash = hash(file.sql, params);
-        if applied
-            .iter()
-            .any(|a| a.path == file.path && a.hash == hash)
-        {
-            continue;
-        }
+    for file in changed_schema(db, files, params).await? {
         let mut query = db.query(file.sql);
         for (name, value) in params {
             query = query.bind((name.to_string(), value.to_string()));
@@ -61,12 +48,63 @@ pub async fn apply_schema(
         db
             .query("UPSERT type::record('__schema_file', $path) SET hash = $hash, applied_at = time::now()")
             .bind(("path", file.path))
-            .bind(("hash", hash))
+            .bind(("hash", hash(file.sql, params)))
             .await?
             .check()?;
         ran.push(file.path);
     }
     Ok(ran)
+}
+
+/// The files whose text or parameters changed since they were last applied
+pub async fn changed_schema(
+    db: &Surreal<Any>,
+    files: &[SchemaFile],
+    params: &[(&str, &str)],
+) -> Result<Vec<SchemaFile>, Error> {
+    // unpaged: the table holds one row per schema file
+    let applied: Vec<Applied> = db
+        .query("SELECT record::id(id) AS path, hash FROM __schema_file")
+        .await?
+        .check()?
+        .take(0)?;
+    let changed = files
+        .iter()
+        .filter(|file| {
+            let hash = hash(file.sql, params);
+            !applied
+                .iter()
+                .any(|a| a.path == file.path && a.hash == hash)
+        })
+        .copied()
+        .collect();
+    Ok(changed)
+}
+
+/// The server's refusal of `file`, found by running it in a transaction that is then cancelled
+pub async fn dry_run_schema(
+    db: &Surreal<Any>,
+    file: &SchemaFile,
+    params: &[(&str, &str)],
+) -> Result<Option<surrealdb::Error>, Error> {
+    let mut query = db.query("BEGIN").query(file.sql).query("CANCEL");
+    for (name, value) in params {
+        query = query.bind((name.to_string(), value.to_string()));
+    }
+    let mut response = query.await?;
+    // a cancelled transaction reports its accepted statements as cancelled or not executed
+    let refusal = response
+        .take_errors()
+        .into_iter()
+        .filter(|(_, error)| {
+            !matches!(
+                error.query_details(),
+                Some(QueryError::Cancelled | QueryError::NotExecuted)
+            )
+        })
+        .min_by_key(|(index, _)| *index)
+        .map(|(_, error)| error);
+    Ok(refusal)
 }
 
 fn hash(sql: &str, params: &[(&str, &str)]) -> String {
@@ -93,6 +131,10 @@ mod tests {
     const A_CHANGED: SchemaFile = SchemaFile {
         path: "a.surql",
         sql: "DEFINE TABLE OVERWRITE a SCHEMAFULL; DEFINE FIELD OVERWRITE n ON a TYPE int;",
+    };
+    const A_OPTIONAL: SchemaFile = SchemaFile {
+        path: "a.surql",
+        sql: "DEFINE TABLE OVERWRITE a SCHEMAFULL; DEFINE FIELD OVERWRITE n ON a TYPE option<int>;",
     };
     const B: SchemaFile = SchemaFile {
         path: "b.surql",
@@ -158,5 +200,26 @@ mod tests {
         }
         let ran = apply_schema(&session, &[A, FIXED], &[]).await.unwrap();
         assert_eq!(ran, ["c.surql"]);
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_reports_only_a_refusal_and_applies_nothing() {
+        let session = tenant_session().await;
+        apply_schema(&session, &[A], &[]).await.unwrap();
+        session.query("CREATE a").await.unwrap().check().unwrap();
+
+        // a required field on a table with rows
+        let refusal = dry_run_schema(&session, &A_CHANGED, &[]).await.unwrap();
+        assert!(refusal.is_some(), "accepted {}", A_CHANGED.sql);
+        let refusal = dry_run_schema(&session, &A_OPTIONAL, &[]).await.unwrap();
+        assert!(refusal.is_none(), "{refusal:?}");
+
+        let fields: Vec<String> = session
+            .query("RETURN object::keys((INFO FOR TABLE a).fields)")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert!(fields.is_empty(), "{fields:?}");
     }
 }

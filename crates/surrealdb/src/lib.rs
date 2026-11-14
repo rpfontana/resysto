@@ -5,7 +5,7 @@ mod schema;
 mod transaction;
 
 pub use page::{Cursor, Page, PageRequest, page, write_in_batches};
-pub use schema::{SchemaFile, apply_schema};
+pub use schema::{SchemaFile, apply_schema, changed_schema, dry_run_schema};
 pub use transaction::{Tx, transaction};
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -115,7 +115,19 @@ impl Db {
         Ok(())
     }
 
-    /// A new session on `database` as the namespace user
+    /// The names of the namespace's databases
+    pub async fn databases(&self) -> Result<Vec<String>, Error> {
+        // without a database selected, 4.0.0 fails on INFO inside an expression
+        let names: Vec<String> = self
+            .system
+            .query("LET $info = INFO FOR NS; RETURN object::keys($info.databases);")
+            .await?
+            .check()?
+            .take(1)?;
+        Ok(names)
+    }
+
+    /// A new session on `database` as the namespace user; opening it creates a missing database
     pub async fn system_session(&self, database: &str) -> Result<Surreal<Any>, Error> {
         let session: Surreal<Any> = self.system.clone();
         session.use_db(database).await?;

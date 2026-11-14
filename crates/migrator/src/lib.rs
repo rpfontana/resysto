@@ -8,8 +8,10 @@ use std::collections::BTreeSet;
 
 use futures_util::{StreamExt, stream};
 use resysto_surrealdb::{Config, Db, SchemaFile};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 
-use crate::migrate::{chain, migrate};
+use crate::migrate::{Applied, Plan, chain, migrate, plan, plan_new};
 use crate::settings::Settings;
 
 const MASTER_DB: &str = "__master";
@@ -54,8 +56,10 @@ pub enum Error {
     Config(#[from] resysto_config::Error),
     #[error("database does not exist")]
     MissingDatabase,
-    #[error("{} tenant migrations failed:{}", .0.len(), failures(.0))]
-    Tenants(Vec<(String, Error)>),
+    #[error("migrate up failed on {0} of the databases")]
+    Failed(usize),
+    #[error("migrate up would fail on {0} of the databases")]
+    WouldFail(usize),
 }
 
 impl From<surrealdb::Error> for Error {
@@ -64,24 +68,87 @@ impl From<surrealdb::Error> for Error {
     }
 }
 
-fn failures(failed: &[(String, Error)]) -> String {
-    failed
-        .iter()
-        .map(|(database, error)| format!("\n  {database}: {}", chain(error)))
-        .collect()
-}
-
 /// Creates the master database if missing and applies the `master` lane
 pub async fn provision_master(db: &Db) -> Result<(), Error> {
-    provision(db, MASTER_DB, &MASTER, &[]).await
+    provision(db, MASTER_DB, &MASTER, &[]).await?;
+    Ok(())
 }
 
 /// Creates `database` if missing and applies the `tenant` lane
 pub async fn provision_tenant(db: &Db, database: &str) -> Result<(), Error> {
-    provision(db, database, &TENANT, &[("access_key", db.verifying_key())]).await
+    provision(db, database, &TENANT, &[("access_key", db.verifying_key())]).await?;
+    Ok(())
 }
 
+/// Migrates the master, then the tenants, and prints what each database applied
 pub async fn migrate_up() -> Result<(), Error> {
+    let db = connect_from_env().await?;
+    let mut failing = 0;
+    for (database, applied) in migrate_up_from(&db, MASTER_DB, TENANT_CONCURRENCY).await? {
+        match applied {
+            Err(error) => {
+                failing += 1;
+                println!("{database}: failed: {}", chain(&error));
+            }
+            Ok(Applied { files, manifests }) if files.is_empty() && manifests.is_empty() => {
+                println!("{database}: up to date");
+            }
+            Ok(Applied { files, manifests }) => {
+                println!("{database}:");
+                for path in files.iter().chain(&manifests) {
+                    println!("  {path}: applied");
+                }
+            }
+        }
+    }
+    if failing > 0 {
+        return Err(Error::Failed(failing));
+    }
+    Ok(())
+}
+
+/// Prints what `migrate_up` would do on each database, changing nothing
+pub async fn migrate_plan() -> Result<(), Error> {
+    let db = connect_from_env().await?;
+    let mut failing = 0;
+    for (database, planned) in plan_from(&db, MASTER_DB, TENANT_CONCURRENCY).await? {
+        match planned {
+            Err(error) => {
+                failing += 1;
+                println!("{database}: would fail: {}", chain(&error));
+            }
+            Ok(Plan { files, manifests }) if files.is_empty() && manifests.is_empty() => {
+                println!("{database}: up to date");
+            }
+            Ok(Plan { files, manifests }) => {
+                println!("{database}:");
+                for (path, refusal) in &files {
+                    match refusal {
+                        Some(refusal) => println!("  {path}: refused: {refusal}"),
+                        None => println!("  {path}: would be applied"),
+                    }
+                }
+                for (path, error) in &manifests {
+                    match error {
+                        Some(error) => {
+                            println!("  {path}: would run again, it failed with: {error}")
+                        }
+                        None => println!("  {path}: would run"),
+                    }
+                }
+                if files.iter().any(|(_, refusal)| refusal.is_some()) {
+                    failing += 1;
+                }
+            }
+        }
+    }
+    if failing > 0 {
+        return Err(Error::WouldFail(failing));
+    }
+    Ok(())
+}
+
+async fn connect_from_env() -> Result<Db, Error> {
     let Settings { db, auth } = resysto_config::load()?;
     let db = Db::connect(Config {
         endpoint: db.endpoint,
@@ -92,26 +159,69 @@ pub async fn migrate_up() -> Result<(), Error> {
         verifying_key: auth.verifying_key,
     })
     .await?;
-    migrate_up_from(&db, MASTER_DB, TENANT_CONCURRENCY).await?;
-    println!("migrations applied");
-    Ok(())
+    Ok(db)
 }
 
-async fn migrate_up_from(db: &Db, master: &str, concurrency: usize) -> Result<(), Error> {
-    provision(db, master, &MASTER, &[]).await?;
-    let mut response = db
-        .system_session(master)
+// the tenants that migrate_up migrates
+async fn tenants(db: &Surreal<Any>) -> Result<Vec<String>, Error> {
+    let tenants: Vec<String> = db
+        .query("SELECT VALUE db_name FROM tenant WHERE state IN ['ready', 'suspended']")
         .await?
-        .query(
-            "SELECT VALUE db_name FROM tenant WHERE state IN ['ready', 'suspended'];
-             RETURN object::keys((INFO FOR NS).databases);",
-        )
-        .await?
-        .check()?;
-    let tenants: Vec<String> = response.take(0)?;
-    let databases: Vec<String> = response.take(1)?;
-    let databases: BTreeSet<String> = databases.into_iter().collect();
-    let mut failed: Vec<(String, Error)> = stream::iter(tenants)
+        .check()?
+        .take(0)?;
+    Ok(tenants)
+}
+
+async fn plan_from(
+    db: &Db,
+    master: &str,
+    concurrency: usize,
+) -> Result<Vec<(String, Result<Plan, Error>)>, Error> {
+    let databases: BTreeSet<String> = db.databases().await?.into_iter().collect();
+    // opening a session would create the missing database
+    if !databases.contains(master) {
+        return Ok(vec![(master.to_owned(), plan_new(&MASTER))]);
+    }
+    let session = db.system_session(master).await?;
+    let mut plans = vec![(master.to_owned(), plan(&session, &MASTER, &[]).await)];
+    let mut planned: Vec<(String, Result<Plan, Error>)> = stream::iter(tenants(&session).await?)
+        .map(|database| {
+            let exists = databases.contains(&database);
+            async move {
+                let result = if exists {
+                    plan_tenant(db, &database).await
+                } else {
+                    Err(Error::MissingDatabase)
+                };
+                (database, result)
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect()
+        .await;
+    planned.sort_by(|a, b| a.0.cmp(&b.0));
+    plans.append(&mut planned);
+    Ok(plans)
+}
+
+async fn plan_tenant(db: &Db, database: &str) -> Result<Plan, Error> {
+    let session = db.system_session(database).await?;
+    plan(&session, &TENANT, &[("access_key", db.verifying_key())]).await
+}
+
+// a failed master stops everything; a failed tenant doesn't stop the others
+async fn migrate_up_from(
+    db: &Db,
+    master: &str,
+    concurrency: usize,
+) -> Result<Vec<(String, Result<Applied, Error>)>, Error> {
+    let mut results = vec![(
+        master.to_owned(),
+        Ok(provision(db, master, &MASTER, &[]).await?),
+    )];
+    let tenants = tenants(&db.system_session(master).await?).await?;
+    let databases: BTreeSet<String> = db.databases().await?.into_iter().collect();
+    let mut migrated: Vec<(String, Result<Applied, Error>)> = stream::iter(tenants)
         .map(|database| {
             let exists = databases.contains(&database);
             async move {
@@ -125,17 +235,14 @@ async fn migrate_up_from(db: &Db, master: &str, concurrency: usize) -> Result<()
             }
         })
         .buffer_unordered(concurrency.max(1))
-        .filter_map(|(database, result)| async move { result.err().map(|error| (database, error)) })
         .collect()
         .await;
-    if failed.is_empty() {
-        return Ok(());
-    }
-    failed.sort_by(|a, b| a.0.cmp(&b.0));
-    Err(Error::Tenants(failed))
+    migrated.sort_by(|a, b| a.0.cmp(&b.0));
+    results.append(&mut migrated);
+    Ok(results)
 }
 
-async fn migrate_tenant(db: &Db, database: &str) -> Result<(), Error> {
+async fn migrate_tenant(db: &Db, database: &str) -> Result<Applied, Error> {
     let session = db.system_session(database).await?;
     migrate(&session, &TENANT, &[("access_key", db.verifying_key())]).await
 }
@@ -145,7 +252,7 @@ async fn provision(
     database: &str,
     lane: &Lane,
     params: &[(&str, &str)],
-) -> Result<(), Error> {
+) -> Result<Applied, Error> {
     db.define_database(database).await?;
     let session = db.system_session(database).await?;
     migrate(&session, lane, params).await
@@ -251,12 +358,15 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
             .check()
             .unwrap();
 
-        let result = migrate_up_from(&db, &master, 2).await;
+        let results = migrate_up_from(&db, &master, 2).await.unwrap();
 
-        let Err(Error::Tenants(failed)) = result else {
-            panic!("{result:?}")
-        };
-        let failed: Vec<&str> = failed.iter().map(|(name, _)| name.as_str()).collect();
+        let names: Vec<&str> = results.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, [&master, &missing, &ready, &suspended]);
+        let failed: Vec<&str> = results
+            .iter()
+            .filter(|(_, result)| result.is_err())
+            .map(|(name, _)| name.as_str())
+            .collect();
         assert_eq!(failed, [missing.as_str()]);
         for database in [&ready, &suspended] {
             let user = RecordId::new("account", Uuid::new_v7());
@@ -271,5 +381,62 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
         let before = info(&db, &tenant).await;
         provision_tenant(&db, &tenant).await.unwrap();
         assert_eq!(info(&db, &tenant).await, before);
+    }
+
+    #[tokio::test]
+    async fn a_plan_covers_the_tenants_of_migrate_up_and_creates_no_database() {
+        let db = connect().await;
+        let id = Uuid::new_v4().simple();
+        let master = format!("t_test_master_{id}");
+        let missing = format!("t_test_missing_{id}");
+        let ready = format!("t_test_ready_{id}");
+        let deleted = format!("t_test_deleted_{id}");
+
+        let plans = plan_from(&db, &master, 2).await.unwrap();
+        assert!(
+            matches!(plans.as_slice(), [(name, Ok(_))] if *name == master),
+            "{plans:?}"
+        );
+        assert!(
+            !db.databases().await.unwrap().contains(&master),
+            "the plan created the master"
+        );
+
+        provision(&db, &master, &MASTER, &[]).await.unwrap();
+        provision_tenant(&db, &ready).await.unwrap();
+        db.system_session(&master)
+            .await
+            .unwrap()
+            .query(
+                "CREATE tenant SET db_name = $ready, state = 'ready';
+                 CREATE tenant SET db_name = $missing, state = 'ready';
+                 CREATE tenant SET db_name = $deleted, state = 'deleted';",
+            )
+            .bind(("ready", ready.clone()))
+            .bind(("missing", missing.clone()))
+            .bind(("deleted", deleted.clone()))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let plans = plan_from(&db, &master, 2).await.unwrap();
+
+        let names: Vec<&str> = plans.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, [&master, &missing, &ready]);
+        assert!(
+            matches!(&plans[1].1, Err(Error::MissingDatabase)),
+            "{plans:?}"
+        );
+        for (name, planned) in [&plans[0], &plans[2]] {
+            assert!(
+                matches!(planned, Ok(Plan { files, manifests }) if files.is_empty() && manifests.is_empty()),
+                "{name}: {planned:?}"
+            );
+        }
+        assert!(
+            !db.databases().await.unwrap().contains(&missing),
+            "the plan created a missing tenant"
+        );
     }
 }

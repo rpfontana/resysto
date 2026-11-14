@@ -33,6 +33,7 @@ pub(crate) enum Step {
     Data(Data),
     Assert(String),
     Remove(Remove),
+    Migrate(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,8 +142,22 @@ fn check(lane: &Lane, section: &str, step: &Step) -> Result<(), String> {
             Err("data must end with a RETURN of the batch's ids".into())
         }
         Step::Remove(_) if section == "expand" => Err("remove is only allowed in contract".into()),
+        Step::Migrate(sql) if !is_field_migration(sql) => {
+            Err("migrate must be a DEFINE FIELD with MIGRATE EXISTING ROWS".into())
+        }
         _ => Ok(()),
     }
+}
+
+fn is_field_migration(sql: &str) -> bool {
+    let words: Vec<String> = sql
+        .split_whitespace()
+        .map(str::to_ascii_uppercase)
+        .collect();
+    words.iter().take(2).eq(["DEFINE", "FIELD"])
+        && words
+            .windows(3)
+            .any(|three| three == ["MIGRATE", "EXISTING", "ROWS"])
 }
 
 fn stamp(path: &str) -> Option<i64> {
@@ -196,6 +211,12 @@ mod tests {
 
         [[contract]]
         remove = { table = "person", field = "n_old" }
+
+        [[contract]]
+        migrate = """
+            DEFINE FIELD OVERWRITE n ON person TYPE int
+                MIGRATE EXISTING ROWS AS n_required USING $value ?? 0 FALLBACK 0
+        """
     "#;
 
     const PATH: &str = "20261112143000-n.toml";
@@ -239,6 +260,11 @@ mod tests {
             one(VALID.replace("[[contract]]", "[[expand]]")),
             one(VALID.replace("field = \"n_old\"", "field = \"n_old\", index = \"n\"")),
             one(VALID.replace("\"n_old\"", "\"n_old; REMOVE TABLE x\"")),
+            one(VALID.replace("MIGRATE EXISTING ROWS AS n_required", "COMMENT 'x'")),
+            one(VALID.replace(
+                "DEFINE FIELD OVERWRITE n",
+                "REMOVE TABLE person; DEFINE FIELD n",
+            )),
         ];
         for files in cases {
             let result = load_lane(&files);
