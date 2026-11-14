@@ -61,6 +61,29 @@ pub(crate) async fn migrate(
     lane: &Lane,
     params: &[(&str, &str)],
 ) -> Result<Applied, Error> {
+    // a new database has no rows to move: it gets every file and records the manifests as done
+    if is_new(db).await? {
+        check_schema(lane)?;
+        let manifests = manifest::load(lane)?;
+        db.query(MIGRATION_TABLE).await?.check()?;
+        // recorded before any file runs, so a run that stops halfway leaves no manifest to run
+        for manifest in &manifests {
+            db.query(
+                "UPSERT type::record('__migration', $id)
+                 SET title = $title, hash = $hash, phase = 'done', updated_at = time::now()",
+            )
+            .bind(("id", manifest.id))
+            .bind(("title", manifest.title.clone()))
+            .bind(("hash", manifest.hash.clone()))
+            .await?
+            .check()?;
+        }
+        let files = apply_schema(db, lane.schema, params).await?;
+        return Ok(Applied {
+            files,
+            manifests: Vec::new(),
+        });
+    }
     db.query(MIGRATION_TABLE).await?.check()?;
     let Work { files, pending } = work(lane, &done(db).await?)?;
     let files = apply_schema(db, &files, params).await?;
@@ -78,6 +101,9 @@ pub(crate) async fn plan(
     lane: &Lane,
     params: &[(&str, &str)],
 ) -> Result<Plan, Error> {
+    if is_new(db).await? {
+        return plan_new(lane);
+    }
     let Work { files, pending } = work(lane, &done(db).await?)?;
     let mut checked = Vec::new();
     for file in changed_schema(db, &files, params).await? {
@@ -105,16 +131,24 @@ pub(crate) async fn plan(
     })
 }
 
-/// What `migrate` would do on a database that doesn't exist yet
+/// What `migrate` would do on a new database, which runs no manifest
 pub(crate) fn plan_new(lane: &Lane) -> Result<Plan, Error> {
-    let Work { files, pending } = work(lane, &[])?;
+    check_schema(lane)?;
+    manifest::load(lane)?;
     Ok(Plan {
-        files: files.iter().map(|file| (file.path, None)).collect(),
-        manifests: pending
-            .iter()
-            .map(|manifest| (manifest.path, None))
-            .collect(),
+        files: lane.schema.iter().map(|file| (file.path, None)).collect(),
+        manifests: Vec::new(),
     })
+}
+
+// no schema file has run on a database without __schema_file
+async fn is_new(db: &Surreal<Any>) -> Result<bool, Error> {
+    let tables: Vec<String> = db
+        .query("LET $info = INFO FOR DB; RETURN object::keys($info.tables);")
+        .await?
+        .check()?
+        .take(1)?;
+    Ok(!tables.iter().any(|table| table == "__schema_file"))
 }
 
 async fn done(db: &Surreal<Any>) -> Result<Vec<Done>, Error> {
@@ -494,6 +528,33 @@ mod tests {
         assert!(
             matches!(result, Err(Error::OutOfOrder { path }) if path == older.0),
             "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_database_gets_the_schema_files_and_records_its_manifests_without_running_them() {
+        // MOVE_EMAIL reads person before its schema step creates the table
+        let db = tenant().await;
+        let new = lane(&[(MOVE_EMAIL_PATH, MOVE_EMAIL)]);
+
+        let planned = plan(&db, &new, &[]).await.unwrap();
+        assert!(
+            matches!(planned.files.as_slice(), [("person.surql", None)])
+                && planned.manifests.is_empty(),
+            "{planned:?}"
+        );
+
+        let applied = migrate(&db, &new, &[]).await.unwrap();
+
+        assert_eq!(applied.files, ["person.surql"]);
+        assert!(applied.manifests.is_empty(), "{applied:?}");
+        let done = row(&db).await;
+        assert_eq!((done.phase.as_str(), &done.error), ("done", &None));
+        assert_eq!(defined(&db, "fields").await, ["email"]);
+        let applied = migrate(&db, &new, &[]).await.unwrap();
+        assert!(
+            applied.files.is_empty() && applied.manifests.is_empty(),
+            "{applied:?}"
         );
     }
 
