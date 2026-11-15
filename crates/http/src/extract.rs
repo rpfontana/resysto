@@ -88,20 +88,19 @@ fn internal(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::Config;
     use secrecy::SecretString;
     use surrealdb::types::Uuid;
 
     use super::*;
 
     #[derive(Deserialize)]
-    struct Settings {
-        db: DbSettings,
-        auth: AuthSettings,
+    struct Config {
+        db: DbConfig,
+        auth: AuthConfig,
     }
 
     #[derive(Deserialize)]
-    struct DbSettings {
+    struct DbConfig {
         endpoint: String,
         namespace: String,
         migrator_user: String,
@@ -109,19 +108,19 @@ mod tests {
     }
 
     #[derive(Deserialize)]
-    struct AuthSettings {
+    struct AuthConfig {
         signing_key: SecretString,
         verifying_key: String,
     }
 
     // a database standing in for the master, with its own tenant rows
     async fn master() -> Surreal<Any> {
-        let Settings { db: settings, auth } = resysto_config::load().unwrap();
-        let server = Db::connect(Config {
-            endpoint: settings.endpoint,
-            namespace: settings.namespace,
-            username: settings.migrator_user,
-            password: settings.migrator_password,
+        let Config { db, auth } = resysto_config::load().unwrap();
+        let server = Db::connect(resysto_surrealdb::Config {
+            endpoint: db.endpoint,
+            namespace: db.namespace,
+            username: db.migrator_user,
+            password: db.migrator_password,
             signing_key: auth.signing_key,
             verifying_key: auth.verifying_key,
         })

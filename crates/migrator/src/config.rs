@@ -2,7 +2,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-pub(crate) struct Settings {
+pub(crate) struct Config {
     pub(crate) db: Db,
     pub(crate) auth: Auth,
 }

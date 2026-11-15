@@ -1,18 +1,18 @@
 //! Migrations and database provisioning
 
+mod config;
 mod manifest;
 mod migrate;
-mod settings;
 
 use std::collections::BTreeSet;
 
 use futures_util::{StreamExt, stream};
-use resysto_surrealdb::{Config, Db, MASTER_DB, SchemaFile};
+use resysto_surrealdb::{Db, MASTER_DB, SchemaFile};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
+use crate::config::Config;
 use crate::migrate::{Applied, Plan, chain, migrate, plan, plan_new};
-use crate::settings::Settings;
 
 /// Tenants migrated at the same time by `migrate_up`
 const TENANT_CONCURRENCY: usize = 4;
@@ -147,8 +147,8 @@ pub async fn migrate_plan() -> Result<(), Error> {
 }
 
 async fn connect_from_env() -> Result<Db, Error> {
-    let Settings { db, auth } = resysto_config::load()?;
-    let db = Db::connect(Config {
+    let Config { db, auth } = resysto_config::load()?;
+    let db = Db::connect(resysto_surrealdb::Config {
         endpoint: db.endpoint,
         namespace: db.namespace,
         username: db.migrator_user,
@@ -277,7 +277,7 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
 
     pub(crate) async fn connect() -> Db {
         let port = std::env::var("SURREAL_PORT").unwrap_or_else(|_| "18000".into());
-        Db::connect(Config {
+        Db::connect(resysto_surrealdb::Config {
             endpoint: format!("ws://127.0.0.1:{port}"),
             namespace: "resysto-dev".into(),
             username: "ns_migrator".into(),

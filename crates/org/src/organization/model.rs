@@ -433,7 +433,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::{Config, Db};
+    use resysto_surrealdb::Db;
     use secrecy::SecretString;
     use surrealdb::types::{RecordId, Uuid};
 
@@ -441,13 +441,13 @@ mod tests {
     use crate::organization::store::REASSIGN_BATCH;
 
     #[derive(Deserialize)]
-    struct Settings {
-        db: DbSettings,
-        auth: AuthSettings,
+    struct Config {
+        db: DbConfig,
+        auth: AuthConfig,
     }
 
     #[derive(Deserialize)]
-    struct DbSettings {
+    struct DbConfig {
         endpoint: String,
         namespace: String,
         migrator_user: String,
@@ -455,19 +455,19 @@ mod tests {
     }
 
     #[derive(Deserialize)]
-    struct AuthSettings {
+    struct AuthConfig {
         signing_key: SecretString,
         verifying_key: String,
     }
 
     // a new tenant with the whole tenant lane, plus a table that tags its rows like every BC will
     async fn tenant() -> Surreal<Any> {
-        let Settings { db: settings, auth } = resysto_config::load().unwrap();
-        let server = Db::connect(Config {
-            endpoint: settings.endpoint,
-            namespace: settings.namespace,
-            username: settings.migrator_user,
-            password: settings.migrator_password,
+        let Config { db, auth } = resysto_config::load().unwrap();
+        let server = Db::connect(resysto_surrealdb::Config {
+            endpoint: db.endpoint,
+            namespace: db.namespace,
+            username: db.migrator_user,
+            password: db.migrator_password,
             signing_key: auth.signing_key,
             verifying_key: auth.verifying_key,
         })

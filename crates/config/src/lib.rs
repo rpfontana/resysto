@@ -1,4 +1,4 @@
-//! Process settings from `RESYSTO_*` environment variables
+//! Process configuration from `RESYSTO_*` environment variables
 
 use std::{env, fs, io};
 
@@ -19,7 +19,7 @@ pub enum Error {
     #[error("{name} and {name}_FILE are both set")]
     Both { name: String },
     #[error(transparent)]
-    Settings(#[from] config::ConfigError),
+    Config(#[from] config::ConfigError),
 }
 
 /// Deserializes `T` from the environment
@@ -54,7 +54,7 @@ fn from_vars<T: DeserializeOwned>(
         })?;
         values.insert(base, content.trim_end_matches(['\n', '\r']).to_owned());
     }
-    let settings = Config::builder()
+    let config = Config::builder()
         .add_source(
             Environment::with_prefix("RESYSTO")
                 .prefix_separator("_")
@@ -62,7 +62,7 @@ fn from_vars<T: DeserializeOwned>(
                 .source(Some(values)),
         )
         .build()?;
-    Ok(settings.try_deserialize()?)
+    Ok(config.try_deserialize()?)
 }
 
 #[cfg(test)]
@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     #[derive(Debug, PartialEq, Deserialize)]
-    struct Settings {
+    struct Config {
         db: Db,
     }
 
@@ -99,7 +99,7 @@ mod tests {
     fn a_file_variable_sets_the_value_without_its_trailing_newline() {
         let password = file("password", "12345\n");
 
-        let settings: Settings = from_vars(vars(&[
+        let config: Config = from_vars(vars(&[
             ("RESYSTO_DB__MIGRATOR_USER", "ns_migrator"),
             ("RESYSTO_DB__MIGRATOR_PASSWORD_FILE", &password),
             ("PATH", "/usr/bin"),
@@ -110,14 +110,14 @@ mod tests {
             migrator_user: "ns_migrator".into(),
             migrator_password: "12345".into(),
         };
-        assert_eq!(settings, Settings { db });
+        assert_eq!(config, Config { db });
     }
 
     #[test]
     fn a_name_set_both_ways_is_rejected() {
         let password = file("both", "secret");
 
-        let result: Result<Settings, Error> = from_vars(vars(&[
+        let result: Result<Config, Error> = from_vars(vars(&[
             ("RESYSTO_DB__MIGRATOR_USER", "ns_migrator"),
             ("RESYSTO_DB__MIGRATOR_PASSWORD", "inline"),
             ("RESYSTO_DB__MIGRATOR_PASSWORD_FILE", &password),

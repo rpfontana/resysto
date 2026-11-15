@@ -1,12 +1,12 @@
 # Configuration
 
-Process settings tell a process how to run: which address to listen on, which database to connect to, which credentials to use. They come from environment variables, are loaded once when a command starts, and stop the command right away if something is missing or malformed. That way a bad deployment fails at startup with a clear message, not minutes later on the first request that needs the value.
+Process configuration tells a process how to run: which address to listen on, which database to connect to, which credentials to use. They come from environment variables, are loaded once when a command starts, and stop the command right away if something is missing or malformed. That way a bad deployment fails at startup with a clear message, not minutes later on the first request that needs the value.
 
 Domain settings, such as how often a tenant polls a feed, are a different thing: they live in the database with permissions and audit, and aren't covered here.
 
 ## Naming
 
-A setting is an environment variable named `RESYSTO_<SECTION>__<KEY>`. The double underscore separates levels, the single underscore stays inside names, and names map to lowercase fields:
+A configuration value is an environment variable named `RESYSTO_<SECTION>__<KEY>`. The double underscore separates levels, the single underscore stays inside names, and names map to lowercase fields:
 
 ```
 RESYSTO_SMTP__HOST         -> smtp.host
@@ -18,12 +18,12 @@ The double underscore is needed because variable names can only contain letters,
 
 ## Loading
 
-Each crate declares the settings it needs in a private struct, usually in its `settings.rs`, with one nested struct per section:
+Each crate declares the configuration it needs in a private struct, usually in its `config.rs`, with one nested struct per section:
 
 ```rust
-// crates/mailer/src/settings.rs
+// crates/mailer/src/config.rs
 #[derive(Deserialize)]
-pub(crate) struct Settings {
+pub(crate) struct Config {
     pub(crate) smtp: Smtp,
 }
 
@@ -36,16 +36,18 @@ pub(crate) struct Smtp {
 }
 ```
 
-The crate loads its settings as the first thing in the function that needs them, before any other work, so a problem shows up before anything has been touched:
+The crate loads its configuration as the first thing in the function that needs it, before any other work, so a problem shows up before anything has been touched:
 
 ```rust
 pub async fn run() -> Result<(), Error> {
-    let Settings { smtp } = resysto_config::load()?;
+    let Config { smtp } = resysto_config::load()?;
     // ...
 }
 ```
 
-`resysto_config::load` is the only code that reads the environment; don't call `std::env::var` anywhere else. The `resysto` binary only parses the command and calls the crate's function, it never reads settings itself. Tests don't read the environment either: they call an inner function that takes the values as arguments.
+A crate that also connects to the database writes `resysto_surrealdb::Config` with its full path, so it doesn't clash with its own `Config`.
+
+`resysto_config::load` is the only code that reads the environment; don't call `std::env::var` anywhere else. The `resysto` binary only parses the command and calls the crate's function, it never reads configuration itself. Tests don't read the environment either: they call an inner function that takes the values as arguments.
 
 ## Secrets
 

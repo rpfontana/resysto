@@ -1,6 +1,6 @@
 //! The HTTP application
 
-mod settings;
+mod config;
 
 use std::future;
 
@@ -8,12 +8,12 @@ use anyhow::Context;
 use axum::Router;
 use axum::extract::FromRef;
 use resysto_http::AppError;
-use resysto_surrealdb::{Config, Db};
+use resysto_surrealdb::Db;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::settings::Settings;
+use crate::config::Config;
 
 /// What the handlers can reach; each extractor takes its part through `FromRef`
 #[derive(Clone, FromRef)]
@@ -23,13 +23,13 @@ struct AppState {
 
 /// Serves the application until Ctrl+C or SIGTERM, letting open requests finish
 pub async fn serve() -> anyhow::Result<()> {
-    let Settings {
+    let Config {
         addr,
         site,
         db,
         auth,
     } = resysto_config::load()?;
-    let db = Db::connect(Config {
+    let db = Db::connect(resysto_surrealdb::Config {
         endpoint: db.endpoint,
         namespace: db.namespace,
         username: db.app_user,
