@@ -7,14 +7,12 @@ mod settings;
 use std::collections::BTreeSet;
 
 use futures_util::{StreamExt, stream};
-use resysto_surrealdb::{Config, Db, SchemaFile};
+use resysto_surrealdb::{Config, Db, MASTER_DB, SchemaFile};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
 use crate::migrate::{Applied, Plan, chain, migrate, plan, plan_new};
 use crate::settings::Settings;
-
-const MASTER_DB: &str = "__master";
 
 /// Tenants migrated at the same time by `migrate_up`
 const TENANT_CONCURRENCY: usize = 4;
@@ -344,10 +342,10 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
             .await
             .unwrap()
             .query(
-                "CREATE tenant SET db_name = $ready, state = 'ready';
-                 CREATE tenant SET db_name = $suspended, state = 'suspended';
-                 CREATE tenant SET db_name = $missing, state = 'ready';
-                 CREATE tenant SET db_name = $deleted, state = 'deleted';",
+                "CREATE tenant SET db_name = $ready, slug = $ready, state = 'ready';
+                 CREATE tenant SET db_name = $suspended, slug = $suspended, state = 'suspended';
+                 CREATE tenant SET db_name = $missing, slug = $missing, state = 'ready';
+                 CREATE tenant SET db_name = $deleted, slug = $deleted, state = 'deleted';",
             )
             .bind(("ready", ready.clone()))
             .bind(("suspended", suspended.clone()))
@@ -408,9 +406,9 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
             .await
             .unwrap()
             .query(
-                "CREATE tenant SET db_name = $ready, state = 'ready';
-                 CREATE tenant SET db_name = $missing, state = 'ready';
-                 CREATE tenant SET db_name = $deleted, state = 'deleted';",
+                "CREATE tenant SET db_name = $ready, slug = $ready, state = 'ready';
+                 CREATE tenant SET db_name = $missing, slug = $missing, state = 'ready';
+                 CREATE tenant SET db_name = $deleted, slug = $deleted, state = 'deleted';",
             )
             .bind(("ready", ready.clone()))
             .bind(("missing", missing.clone()))

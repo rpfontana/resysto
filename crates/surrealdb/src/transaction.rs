@@ -27,6 +27,23 @@ impl Tx {
     }
 }
 
+/// A session or an open transaction, so one query function serves both, as sqlx's `Executor` does
+pub trait Executor {
+    fn query<'a>(&'a self, sql: impl Into<Cow<'a, str>>) -> Query<'a, Any>;
+}
+
+impl Executor for Surreal<Any> {
+    fn query<'a>(&'a self, sql: impl Into<Cow<'a, str>>) -> Query<'a, Any> {
+        Surreal::query(self, sql)
+    }
+}
+
+impl Executor for Tx {
+    fn query<'a>(&'a self, sql: impl Into<Cow<'a, str>>) -> Query<'a, Any> {
+        Tx::query(self, sql)
+    }
+}
+
 /// Runs `f` in a transaction, committing on `Ok` and cancelling on `Err`; a write conflict
 /// reruns `f`, so it must have no effect outside the database
 pub async fn transaction<T, F, Fut>(db: &Surreal<Any>, mut f: F) -> Result<T, Error>

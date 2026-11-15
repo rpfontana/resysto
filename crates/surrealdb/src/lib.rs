@@ -6,9 +6,10 @@ mod transaction;
 
 pub use page::{Cursor, Page, PageRequest, page, write_in_batches};
 pub use schema::{SchemaFile, apply_schema, changed_schema, dry_run_schema};
-pub use transaction::{Tx, transaction};
+pub use transaction::{Executor, Tx, transaction};
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use secrecy::{ExposeSecret, SecretString};
@@ -17,9 +18,17 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::{self, Any};
 use surrealdb::opt::auth::Namespace;
 use surrealdb::types::{RecordId, ToSql};
+use tokio::sync::RwLock;
+
+/// The database of the master lane, which registers the tenants
+pub const MASTER_DB: &str = "__master";
 
 const ACCESS: &str = "app";
 const TOKEN_TTL_SECS: u64 = 15 * 60;
+
+/// How long a namespace user's token serves new sessions before a new signin; it must stay below
+/// the user's `DURATION FOR TOKEN`, 1h by default
+const RENEW_AFTER: Duration = Duration::from_secs(30 * 60);
 
 /// Connection settings
 pub struct Config {
@@ -37,12 +46,25 @@ pub struct Config {
     pub verifying_key: String,
 }
 
-/// A connection signed in as the namespace user
-pub struct Db {
-    system: Surreal<Any>,
+/// A connection with sessions as the namespace user or as a record user; cloning it is cheap
+#[derive(Clone)]
+pub struct Db(Arc<Inner>);
+
+struct Inner {
+    // never authenticated: record sessions start here
+    bare: Surreal<Any>,
+    // authenticated with a token of the namespace user: system sessions start here
+    system: RwLock<Arc<System>>,
     namespace: String,
+    username: String,
+    password: SecretString,
     signing_key: EncodingKey,
     verifying_key: String,
+}
+
+struct System {
+    session: Surreal<Any>,
+    renew_at: Instant,
 }
 
 /// Errors returned by [`Db`]
@@ -88,27 +110,24 @@ struct Claims<'a> {
 impl Db {
     /// Connects and signs in as the namespace user
     pub async fn connect(config: Config) -> Result<Self, Error> {
-        let system = any::connect(config.endpoint).await?;
-        system
-            .signin(Namespace {
-                namespace: config.namespace.clone(),
-                username: config.username,
-                password: config.password.expose_secret().to_owned(),
-            })
-            .await?;
-        system.use_ns(&config.namespace).await?;
-        Ok(Self {
-            system,
+        let bare = any::connect(config.endpoint).await?;
+        let system = sign_in(&bare, &config.namespace, &config.username, &config.password).await?;
+        Ok(Self(Arc::new(Inner {
+            bare,
+            system: RwLock::new(Arc::new(system)),
             namespace: config.namespace,
+            username: config.username,
+            password: config.password,
             signing_key: EncodingKey::from_ec_pem(config.signing_key.expose_secret().as_bytes())?,
             verifying_key: config.verifying_key,
-        })
+        })))
     }
 
     /// Creates `database` if missing
     pub async fn define_database(&self, database: &str) -> Result<(), Error> {
         check_name(database)?;
-        self.system
+        self.namespace_session()
+            .await?
             .query(format!("DEFINE DATABASE IF NOT EXISTS `{database}`"))
             .await?
             .check()?;
@@ -119,7 +138,8 @@ impl Db {
     pub async fn databases(&self) -> Result<Vec<String>, Error> {
         // without a database selected, 4.0.0 fails on INFO inside an expression
         let names: Vec<String> = self
-            .system
+            .namespace_session()
+            .await?
             .query("LET $info = INFO FOR NS; RETURN object::keys($info.databases);")
             .await?
             .check()?
@@ -129,14 +149,36 @@ impl Db {
 
     /// A new session on `database` as the namespace user; opening it creates a missing database
     pub async fn system_session(&self, database: &str) -> Result<Surreal<Any>, Error> {
-        let session: Surreal<Any> = self.system.clone();
+        let session = self.namespace_session().await?;
         session.use_db(database).await?;
         Ok(session)
     }
 
+    // a new session as the namespace user on no database, signing in again once the token is old
+    async fn namespace_session(&self) -> Result<Surreal<Any>, Error> {
+        let current = Arc::clone(&*self.0.system.read().await);
+        if Instant::now() < current.renew_at {
+            return Ok(current.session.clone());
+        }
+        let mut system = self.0.system.write().await;
+        // another request may have renewed it while this one waited for the lock
+        if Instant::now() >= system.renew_at {
+            *system = Arc::new(
+                sign_in(
+                    &self.0.bare,
+                    &self.0.namespace,
+                    &self.0.username,
+                    &self.0.password,
+                )
+                .await?,
+            );
+        }
+        Ok(system.session.clone())
+    }
+
     /// The SPKI PEM that each database's `app` access verifies record session tokens with
     pub fn verifying_key(&self) -> &str {
-        &self.verifying_key
+        &self.0.verifying_key
     }
 
     /// A new record session on `database` as `user`, through the database's `app` access
@@ -146,7 +188,7 @@ impl Db {
         user: impl Into<RecordId>,
     ) -> Result<Surreal<Any>, Error> {
         let token = self.record_token(database, &user.into())?;
-        let session = self.system.clone();
+        let session = self.0.bare.clone();
         session.authenticate(token).await?;
         Ok(session)
     }
@@ -156,7 +198,7 @@ impl Db {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let claims = Claims {
-            ns: &self.namespace,
+            ns: &self.0.namespace,
             db: database,
             ac: ACCESS,
             id: user.to_sql(),
@@ -166,9 +208,32 @@ impl Db {
         Ok(jsonwebtoken::encode(
             &Header::new(Algorithm::ES256),
             &claims,
-            &self.signing_key,
+            &self.0.signing_key,
         )?)
     }
+}
+
+// signs in on a throwaway session and hands the token to a new one, whose clones then replay the
+// token and not the password
+async fn sign_in(
+    bare: &Surreal<Any>,
+    namespace: &str,
+    username: &str,
+    password: &SecretString,
+) -> Result<System, Error> {
+    let renew_at = Instant::now() + RENEW_AFTER;
+    let token = bare
+        .clone()
+        .signin(Namespace {
+            namespace: namespace.to_owned(),
+            username: username.to_owned(),
+            password: password.expose_secret().to_owned(),
+        })
+        .await?;
+    let session = bare.clone();
+    session.authenticate(token).await?;
+    session.use_ns(namespace).await?;
+    Ok(System { session, renew_at })
 }
 
 // the name is interpolated into SurrealQL as an identifier
@@ -309,6 +374,51 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
             .take(0)
             .unwrap();
         assert!(rows.is_empty(), "read {rows:?} from another tenant");
+    }
+
+    #[tokio::test]
+    async fn sessions_work_again_after_the_namespace_token_expires() {
+        let admin = connect().await;
+        let tenant = new_tenant(&admin).await;
+        let user = format!("short_{}", Uuid::new_v4().simple());
+        let define = format!(
+            "DEFINE USER {user} ON NAMESPACE PASSWORD 'short' ROLES EDITOR DURATION FOR TOKEN 1s"
+        );
+        let admin_session = admin.system_session(&tenant).await.unwrap();
+        admin_session.query(define).await.unwrap().check().unwrap();
+        let port = std::env::var("SURREAL_PORT").unwrap_or_else(|_| "18000".into());
+        let db = Db::connect(Config {
+            endpoint: format!("ws://127.0.0.1:{port}"),
+            namespace: "resysto-dev".into(),
+            username: user.clone(),
+            password: "short".into(),
+            signing_key: SIGNING_KEY.into(),
+            verifying_key: VERIFYING_KEY.into(),
+        })
+        .await
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        // an idle server finds its system session stale on the next request
+        let stale = System {
+            session: db.0.bare.clone(),
+            renew_at: Instant::now(),
+        };
+        *db.0.system.write().await = Arc::new(stale);
+        let session = db.system_session(&tenant).await;
+
+        admin_session
+            .query(format!("REMOVE USER {user} ON NAMESPACE"))
+            .await
+            .unwrap();
+        let session = session.unwrap();
+        let tenant_seen: Option<String> = session
+            .query("RETURN session::db()")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(tenant_seen, Some(tenant));
     }
 
     #[test]
