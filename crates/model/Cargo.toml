@@ -1,0 +1,17 @@
+[package]
+name = "resysto-model"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+resysto-id = { path = "../id" }
+serde.workspace = true
+surrealdb-types.workspace = true
+validator.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
