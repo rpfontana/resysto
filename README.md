@@ -1,1 +1,1 @@
-<p align="center"><img src="public/logo-white.svg" alt="resysto" width="366"></p>
+<p align="center"><img src="web/static/logo-white.svg" alt="resysto" width="366"></p>

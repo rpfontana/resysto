@@ -1,0 +1,4 @@
+# a version published less than a week ago is not installed
+minimumReleaseAge: 10080
+engineStrict: true
+saveExact: true

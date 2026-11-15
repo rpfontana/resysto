@@ -2245,6 +2245,7 @@ dependencies = [
  "secrecy",
  "serde",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
 ]
