@@ -37,9 +37,9 @@ pub enum Industry {
     Other,
 }
 
-/// An organization as the API returns it
+/// An organization as stored, which the API returns as it is
 #[derive(Debug, Clone, PartialEq, Serialize, SurrealValue)]
-pub struct OrganizationView {
+pub struct OrganizationRecord {
     pub id: OrganizationId,
     pub name: String,
     pub parent: Option<OrganizationId>,
@@ -179,7 +179,7 @@ pub enum OrganizationError {
 pub async fn create(
     db: &Surreal<Any>,
     input: NewOrganization,
-) -> Result<OrganizationView, OrganizationError> {
+) -> Result<OrganizationRecord, OrganizationError> {
     let path = match input.parent {
         None => Vec::new(),
         Some(parent) => {
@@ -221,7 +221,7 @@ pub async fn create(
 pub async fn get(
     db: &Surreal<Any>,
     id: OrganizationId,
-) -> Result<OrganizationView, OrganizationError> {
+) -> Result<OrganizationRecord, OrganizationError> {
     store::find(db, id)
         .await?
         .ok_or(OrganizationError::NotFound)
@@ -231,7 +231,7 @@ pub async fn get(
 pub async fn list(
     db: &Surreal<Any>,
     request: PageRequest,
-) -> Result<Page<OrganizationView>, OrganizationError> {
+) -> Result<Page<OrganizationRecord>, OrganizationError> {
     Ok(store::list(db, request).await?)
 }
 
@@ -240,7 +240,7 @@ pub async fn update(
     db: &Surreal<Any>,
     id: OrganizationId,
     patch: OrganizationPatch,
-) -> Result<OrganizationView, OrganizationError> {
+) -> Result<OrganizationRecord, OrganizationError> {
     transaction(db, |tx| {
         let patch = patch.clone();
         async move { update_in(&tx, id, patch).await }
@@ -253,7 +253,7 @@ async fn update_in(
     tx: &Tx,
     id: OrganizationId,
     patch: OrganizationPatch,
-) -> Result<Result<OrganizationView, OrganizationError>, resysto_surrealdb::Error> {
+) -> Result<Result<OrganizationRecord, OrganizationError>, resysto_surrealdb::Error> {
     let Some(current) = store::find(tx, id).await? else {
         return Ok(Err(OrganizationError::NotFound));
     };
@@ -493,8 +493,8 @@ mod tests {
     async fn add(
         db: &Surreal<Any>,
         name: &str,
-        parent: Option<&OrganizationView>,
-    ) -> OrganizationView {
+        parent: Option<&OrganizationRecord>,
+    ) -> OrganizationRecord {
         let input = NewOrganization {
             name: name.into(),
             parent: parent.map(|parent| parent.id),
@@ -503,18 +503,18 @@ mod tests {
         create(db, input).await.unwrap()
     }
 
-    async fn path_of(db: &Surreal<Any>, org: &OrganizationView) -> Vec<OrganizationId> {
+    async fn path_of(db: &Surreal<Any>, org: &OrganizationRecord) -> Vec<OrganizationId> {
         get(db, org.id).await.unwrap().path
     }
 
-    fn move_to(parent: Option<&OrganizationView>) -> OrganizationPatch {
+    fn move_to(parent: Option<&OrganizationRecord>) -> OrganizationPatch {
         OrganizationPatch {
             parent: Some(parent.map(|parent| parent.id)),
             ..Default::default()
         }
     }
 
-    async fn tag(db: &Surreal<Any>, orgs: &[&OrganizationView]) -> RecordId {
+    async fn tag(db: &Surreal<Any>, orgs: &[&OrganizationRecord]) -> RecordId {
         let ids: Vec<OrganizationId> = orgs.iter().map(|org| org.id).collect();
         db.query("CREATE ONLY item SET organization_ids = $ids RETURN VALUE id")
             .bind(("ids", ids))

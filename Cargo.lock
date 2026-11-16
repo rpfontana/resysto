@@ -2233,6 +2233,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "resysto-people"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "resysto-config",
+ "resysto-http",
+ "resysto-migrator",
+ "resysto-model",
+ "resysto-surrealdb",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "surrealdb",
+ "thiserror",
+ "tokio",
+ "validator",
+]
+
+[[package]]
 name = "resysto-server"
 version = "0.1.0"
 dependencies = [
@@ -2241,6 +2260,7 @@ dependencies = [
  "resysto-config",
  "resysto-http",
  "resysto-org",
+ "resysto-people",
  "resysto-surrealdb",
  "secrecy",
  "serde",

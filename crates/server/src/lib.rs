@@ -117,6 +117,7 @@ fn immutable_if_found(response: &Response<ServeFileSystemResponseBody>) -> Optio
 fn api() -> Router<AppState> {
     Router::new()
         .nest("/organizations", resysto_org::organization::router())
+        .nest("/people", resysto_people::person::router())
         .fallback(async || AppError::NotFound)
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,

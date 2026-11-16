@@ -6,7 +6,7 @@ use resysto_model::{Country, Email, OrganizationId};
 use resysto_surrealdb::{Error, Executor, Page, PageRequest, page, write_in_batches};
 use surrealdb::types::SurrealValue;
 
-use super::model::{Industry, OrganizationView};
+use super::model::{Industry, OrganizationRecord};
 
 /// Records a reassign rewrites per transaction
 pub(super) const REASSIGN_BATCH: u32 = 500;
@@ -43,8 +43,8 @@ struct Use {
 pub(super) async fn find(
     db: &impl Executor,
     id: OrganizationId,
-) -> Result<Option<OrganizationView>, Error> {
-    let found: Option<OrganizationView> = db
+) -> Result<Option<OrganizationRecord>, Error> {
+    let found: Option<OrganizationRecord> = db
         .query("SELECT * FROM ONLY $id")
         .bind(("id", id))
         .await?
@@ -57,7 +57,7 @@ pub(super) async fn find(
 pub(super) async fn list(
     db: &impl Executor,
     request: PageRequest,
-) -> Result<Page<OrganizationView>, Error> {
+) -> Result<Page<OrganizationRecord>, Error> {
     let query = db.query("SELECT * FROM type::record('organization', $range) LIMIT $limit");
     page(query, request).await
 }
@@ -81,8 +81,8 @@ pub(super) async fn insert(
     db: &impl Executor,
     id: OrganizationId,
     content: Content,
-) -> Result<Option<OrganizationView>, Error> {
-    let created: Option<OrganizationView> = db
+) -> Result<Option<OrganizationRecord>, Error> {
+    let created: Option<OrganizationRecord> = db
         .query("CREATE ONLY $id CONTENT $content")
         .bind(("id", id))
         .bind(("content", content))
@@ -97,8 +97,8 @@ pub(super) async fn merge(
     db: &impl Executor,
     id: OrganizationId,
     content: Content,
-) -> Result<Option<OrganizationView>, Error> {
-    let updated: Option<OrganizationView> = db
+) -> Result<Option<OrganizationRecord>, Error> {
+    let updated: Option<OrganizationRecord> = db
         .query("UPDATE ONLY $id MERGE $content")
         .bind(("id", id))
         .bind(("content", content))
@@ -210,27 +210,27 @@ pub(super) async fn reassign(
     .await
 }
 
-impl From<OrganizationView> for Content {
-    fn from(view: OrganizationView) -> Self {
+impl From<OrganizationRecord> for Content {
+    fn from(record: OrganizationRecord) -> Self {
         Self {
-            name: view.name,
-            parent: view.parent,
-            path: view.path,
-            active: view.active,
-            org_type: view.org_type,
-            description: view.description,
-            notes: view.notes,
-            email: view.email,
-            phone: view.phone,
-            website: view.website,
-            address: view.address,
-            city: view.city,
-            postal_code: view.postal_code,
-            country: view.country,
-            vat_number: view.vat_number,
-            industry: view.industry,
-            annual_income: view.annual_income,
-            employee_count: view.employee_count,
+            name: record.name,
+            parent: record.parent,
+            path: record.path,
+            active: record.active,
+            org_type: record.org_type,
+            description: record.description,
+            notes: record.notes,
+            email: record.email,
+            phone: record.phone,
+            website: record.website,
+            address: record.address,
+            city: record.city,
+            postal_code: record.postal_code,
+            country: record.country,
+            vat_number: record.vat_number,
+            industry: record.industry,
+            annual_income: record.annual_income,
+            employee_count: record.employee_count,
         }
     }
 }

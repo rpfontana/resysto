@@ -8,7 +8,9 @@ use resysto_surrealdb::{Db, Page, PageRequest};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use super::model::{self, NewOrganization, OrganizationError, OrganizationPatch, OrganizationView};
+use super::model::{
+    self, NewOrganization, OrganizationError, OrganizationPatch, OrganizationRecord,
+};
 
 /// The routes of `/t/{slug}/api/v1/organizations`, for any state that holds a [`Db`]
 pub fn router<S>() -> Router<S>
@@ -41,14 +43,14 @@ struct Reassigned {
 async fn list(
     TenantDb(db): TenantDb,
     Query(request): Query<PageRequest>,
-) -> AppResult<Json<Page<OrganizationView>>> {
+) -> AppResult<Json<Page<OrganizationRecord>>> {
     Ok(Json(model::list(&db, request).await?))
 }
 
 async fn create(
     TenantDb(db): TenantDb,
     ValidatedJson(input): ValidatedJson<NewOrganization>,
-) -> AppResult<(StatusCode, Json<ApiResponse<OrganizationView>>)> {
+) -> AppResult<(StatusCode, Json<ApiResponse<OrganizationRecord>>)> {
     let data = model::create(&db, input).await?;
     Ok((StatusCode::CREATED, Json(ApiResponse { data })))
 }
@@ -56,7 +58,7 @@ async fn create(
 async fn read(
     TenantDb(db): TenantDb,
     Path(ById { id }): Path<ById>,
-) -> AppResult<Json<ApiResponse<OrganizationView>>> {
+) -> AppResult<Json<ApiResponse<OrganizationRecord>>> {
     let data = model::get(&db, id).await?;
     Ok(Json(ApiResponse { data }))
 }
@@ -65,7 +67,7 @@ async fn update(
     TenantDb(db): TenantDb,
     Path(ById { id }): Path<ById>,
     ValidatedJson(patch): ValidatedJson<OrganizationPatch>,
-) -> AppResult<Json<ApiResponse<OrganizationView>>> {
+) -> AppResult<Json<ApiResponse<OrganizationRecord>>> {
     let data = model::update(&db, id, patch).await?;
     Ok(Json(ApiResponse { data }))
 }

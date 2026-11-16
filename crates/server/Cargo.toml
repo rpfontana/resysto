@@ -10,6 +10,7 @@ axum = { workspace = true, features = ["macros"] }
 resysto-config = { path = "../config" }
 resysto-http = { path = "../http" }
 resysto-org = { path = "../core/org" }
+resysto-people = { path = "../core/people" }
 resysto-surrealdb = { path = "../db/surrealdb" }
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
