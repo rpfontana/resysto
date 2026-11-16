@@ -6,17 +6,17 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
-resysto-http = { path = "../http" }
-resysto-model = { path = "../model" }
-resysto-surrealdb = { path = "../surrealdb" }
+resysto-http = { path = "../../http" }
+resysto-model = { path = "../../model" }
+resysto-surrealdb = { path = "../../db/surrealdb" }
 serde = { workspace = true, features = ["derive"] }
 surrealdb.workspace = true
 thiserror.workspace = true
 validator.workspace = true
 
 [dev-dependencies]
-resysto-config = { path = "../config" }
-resysto-migrator = { path = "../migrator" }
+resysto-config = { path = "../../config" }
+resysto-migrator = { path = "../../db/migrator" }
 secrecy.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

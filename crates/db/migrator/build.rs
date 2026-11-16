@@ -4,7 +4,7 @@ use std::{env, fs, io};
 const LANES: [&str; 2] = ["master", "tenant"];
 
 fn main() -> io::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../migrations");
     rerun_if_changed(&root);
     let mut lanes = String::new();
     for name in LANES {

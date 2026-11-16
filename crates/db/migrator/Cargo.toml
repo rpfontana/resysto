@@ -1,21 +1,22 @@
 [package]
-name = "resysto-surrealdb"
+name = "resysto-migrator"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-jsonwebtoken.workspace = true
+futures-util.workspace = true
+resysto-config = { path = "../../config" }
+resysto-surrealdb = { path = "../surrealdb" }
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true
 surrealdb.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-uuid.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
-resysto-id = { path = "../id" }
+tokio.workspace = true
 
 [lints]
 workspace = true
