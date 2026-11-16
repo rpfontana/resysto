@@ -26,7 +26,6 @@ pub(super) async fn find(db: &impl Executor, id: PersonId) -> Result<Option<Pers
     Ok(found)
 }
 
-/// One page of the people, in creation order
 pub(super) async fn list(
     db: &impl Executor,
     request: PageRequest,
@@ -35,7 +34,6 @@ pub(super) async fn list(
     page(query, request).await
 }
 
-/// The organizations among `ids` that do not exist
 pub(super) async fn missing_organizations(
     db: &impl Executor,
     ids: &[OrganizationId],

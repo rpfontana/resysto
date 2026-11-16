@@ -1,5 +1,3 @@
-//! People: the types, the rules and the operations that apply them
-
 use std::collections::BTreeSet;
 
 use resysto_model::{Email, OrganizationId, PersonId};
@@ -12,7 +10,6 @@ use validator::{Validate, ValidationError};
 
 use super::store::{self, Content};
 
-/// A person as stored, which the API returns as it is
 #[derive(Debug, Clone, PartialEq, Serialize, SurrealValue)]
 pub struct PersonRecord {
     pub id: PersonId,
@@ -22,13 +19,11 @@ pub struct PersonRecord {
     pub phone: Option<String>,
     pub job_title: Option<String>,
     pub department: Option<String>,
-    /// The organizations the person belongs to, at least one
     pub organization_ids: Vec<OrganizationId>,
     pub created_at: Datetime,
     pub updated_at: Datetime,
 }
 
-/// The body of a create
 #[derive(Debug, Clone, Default, Deserialize, Validate)]
 pub struct NewPerson {
     #[validate(custom(function = "person_name"))]
@@ -66,7 +61,6 @@ pub struct PersonPatch {
     #[serde(default, deserialize_with = "nullable")]
     #[validate(length(max = 200, message = "at most 200 characters"))]
     pub department: Option<Option<String>>,
-    /// Replaces the whole list
     #[serde(default, deserialize_with = "present")]
     #[validate(length(min = 1, message = "at least one organization"))]
     pub organization_ids: Option<Vec<OrganizationId>>,
@@ -82,7 +76,6 @@ pub enum PersonError {
     Db(#[from] resysto_surrealdb::Error),
 }
 
-/// Creates a person in organizations that exist
 pub async fn create(db: &Surreal<Any>, input: NewPerson) -> Result<PersonRecord, PersonError> {
     let organization_ids = distinct(input.organization_ids);
     let missing = store::missing_organizations(db, &organization_ids).await?;
@@ -182,7 +175,6 @@ impl PersonPatch {
     }
 }
 
-// an organization listed twice adds nothing; the first occurrence keeps its place
 fn distinct(ids: Vec<OrganizationId>) -> Vec<OrganizationId> {
     let mut seen = BTreeSet::new();
     ids.into_iter().filter(|id| seen.insert(*id)).collect()
@@ -248,7 +240,6 @@ mod tests {
         verifying_key: String,
     }
 
-    // a new tenant with the whole tenant lane
     async fn tenant() -> Surreal<Any> {
         let Config { db, auth } = resysto_config::load().unwrap();
         let server = Db::connect(resysto_surrealdb::Config {
@@ -268,7 +259,6 @@ mod tests {
         server.system_session(&name).await.unwrap()
     }
 
-    // written by hand: a bounded context does not depend on another one
     async fn organization(db: &Surreal<Any>, name: &str) -> OrganizationId {
         db.query("CREATE ONLY organization SET name = $name, path = [] RETURN VALUE id")
             .bind(("name", name.to_owned()))

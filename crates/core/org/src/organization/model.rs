@@ -37,7 +37,6 @@ pub enum Industry {
     Other,
 }
 
-/// An organization as stored, which the API returns as it is
 #[derive(Debug, Clone, PartialEq, Serialize, SurrealValue)]
 pub struct OrganizationRecord {
     pub id: OrganizationId,
