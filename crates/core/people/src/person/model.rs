@@ -72,6 +72,8 @@ pub enum PersonError {
     NotFound,
     #[error("organizations not found: {}", ids_text(.0))]
     OrganizationsNotFound(Vec<OrganizationId>),
+    #[error("outside what the session may write")]
+    Forbidden,
     #[error(transparent)]
     Db(#[from] resysto_surrealdb::Error),
 }
@@ -93,7 +95,7 @@ pub async fn create(db: &Surreal<Any>, input: NewPerson) -> Result<PersonRecord,
     };
     store::insert(db, PersonId::new(), content)
         .await?
-        .ok_or(PersonError::NotFound)
+        .ok_or(PersonError::Forbidden)
 }
 
 pub async fn get(db: &Surreal<Any>, id: PersonId) -> Result<PersonRecord, PersonError> {
@@ -139,14 +141,18 @@ async fn update_in(
     patch.apply(&mut content);
     Ok(store::merge(tx, id, content)
         .await?
-        .ok_or(PersonError::NotFound))
+        .ok_or(PersonError::Forbidden))
 }
 
 pub async fn delete(db: &Surreal<Any>, id: PersonId) -> Result<(), PersonError> {
     if !store::exists(db, id).await? {
         return Err(PersonError::NotFound);
     }
-    Ok(store::delete(db, id).await?)
+    if store::delete(db, id).await? {
+        Ok(())
+    } else {
+        Err(PersonError::Forbidden)
+    }
 }
 
 impl PersonPatch {
@@ -214,9 +220,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::Db;
+    use resysto_surrealdb::{Db, Grant};
     use secrecy::SecretString;
-    use surrealdb::types::Uuid;
+    use surrealdb::types::{RecordId, Uuid};
 
     use super::*;
 
@@ -240,7 +246,7 @@ mod tests {
         verifying_key: String,
     }
 
-    async fn tenant() -> Surreal<Any> {
+    async fn provisioned() -> (Db, String) {
         let Config { db, auth } = resysto_config::load().unwrap();
         let server = Db::connect(resysto_surrealdb::Config {
             endpoint: db.endpoint,
@@ -256,19 +262,39 @@ mod tests {
         resysto_migrator::provision_tenant(&server, &name)
             .await
             .unwrap();
-        server.system_session(&name).await.unwrap()
+        (server, name)
+    }
+
+    async fn session(
+        server: &Db,
+        name: &str,
+        organizations: Option<&[OrganizationId]>,
+        write: bool,
+    ) -> Surreal<Any> {
+        let grant = Grant {
+            organizations: organizations
+                .map(|ids| ids.iter().copied().map(RecordId::from).collect()),
+            write,
+        };
+        let member = RecordId::new("account", Uuid::new_v7());
+        server.record_session(name, member, &grant).await.unwrap()
+    }
+
+    async fn tenant() -> Surreal<Any> {
+        let (server, name) = provisioned().await;
+        session(&server, &name, None, true).await
     }
 
     async fn organization(db: &Surreal<Any>, name: &str) -> OrganizationId {
-        db.query("CREATE ONLY organization SET name = $name, path = [] RETURN VALUE id")
+        let id = OrganizationId::new();
+        db.query("CREATE $id SET name = $name, path = []")
+            .bind(("id", id))
             .bind(("name", name.to_owned()))
             .await
             .unwrap()
             .check()
-            .unwrap()
-            .take::<Option<OrganizationId>>(0)
-            .unwrap()
-            .unwrap()
+            .unwrap();
+        id
     }
 
     fn ada(organization_ids: Vec<OrganizationId>) -> NewPerson {
@@ -364,5 +390,59 @@ mod tests {
             let parsed = serde_json::from_str::<PersonPatch>(body);
             assert!(parsed.is_err(), "accepted {body}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_scoped_session_reads_and_writes_only_the_people_of_its_organizations() {
+        let (server, name) = provisioned().await;
+        let admin = session(&server, &name, None, true).await;
+        let milano = organization(&admin, "milano").await;
+        let roma = organization(&admin, "roma").await;
+        let in_milano = create(&admin, ada(vec![milano])).await.unwrap();
+        let in_roma = create(&admin, ada(vec![roma])).await.unwrap();
+        let in_both = create(&admin, ada(vec![milano, roma])).await.unwrap();
+
+        let scoped = session(&server, &name, Some(&[milano]), true).await;
+        let seen: Vec<PersonId> = list(&scoped, PageRequest::default())
+            .await
+            .unwrap()
+            .data
+            .into_iter()
+            .map(|person| person.id)
+            .collect();
+        assert_eq!(seen, vec![in_milano.id, in_both.id]);
+        assert!(matches!(
+            get(&scoped, in_roma.id).await,
+            Err(PersonError::NotFound)
+        ));
+
+        // an organization outside the scope reads as one that does not exist
+        let refused = create(&scoped, ada(vec![roma])).await;
+        assert!(
+            matches!(refused, Err(PersonError::OrganizationsNotFound(_))),
+            "{refused:?}"
+        );
+        let retitle = PersonPatch {
+            job_title: Some(Some("CISO".into())),
+            ..Default::default()
+        };
+        let refusals = [
+            ("update", update(&scoped, in_both.id, retitle).await.err()),
+            ("delete", delete(&scoped, in_both.id).await.err()),
+        ];
+        for (operation, refused) in refusals {
+            assert!(
+                matches!(refused, Some(PersonError::Forbidden)),
+                "{operation}: {refused:?}"
+            );
+        }
+        assert!(get(&admin, in_both.id).await.unwrap().job_title.is_none());
+
+        let reading = session(&server, &name, Some(&[milano]), false).await;
+        let refused = create(&reading, ada(vec![milano])).await;
+        assert!(
+            matches!(refused, Err(PersonError::Forbidden)),
+            "{refused:?}"
+        );
     }
 }

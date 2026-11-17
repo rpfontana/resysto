@@ -1,0 +1,16 @@
+title = "tenant.mfa_required_for and session.mfa"
+
+[[expand]]
+migrate = """
+    DEFINE FIELD OVERWRITE mfa_required_for ON tenant TYPE 'admins' | 'everyone'
+        MIGRATE EXISTING ROWS AS add_mfa_required_for USING 'admins'
+"""
+
+[[expand]]
+schema = "tenant.surql"
+
+[[expand]]
+migrate = "DEFINE FIELD OVERWRITE mfa ON session TYPE bool MIGRATE EXISTING ROWS AS add_session_mfa USING false"
+
+[[expand]]
+schema = "session.surql"

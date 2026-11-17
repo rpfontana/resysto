@@ -1,4 +1,8 @@
-DEFINE TABLE OVERWRITE person SCHEMAFULL PERMISSIONS NONE;
+DEFINE TABLE OVERWRITE person SCHEMAFULL PERMISSIONS
+    FOR select WHERE $token.org_all = true
+        OR organization_ids.map(|$o| <string> $o) CONTAINSANY $token.org_scope
+    FOR create, update, delete WHERE $token.write = true AND ($token.org_all = true
+        OR organization_ids.map(|$o| <string> $o) ALLINSIDE $token.org_scope);
 
 DEFINE FIELD OVERWRITE first_name ON person TYPE string;
 DEFINE FIELD OVERWRITE last_name ON person TYPE string;

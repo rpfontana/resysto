@@ -66,9 +66,9 @@ impl From<surrealdb::Error> for Error {
     }
 }
 
-/// Creates the master database if missing and applies the `master` lane
-pub async fn provision_master(db: &Db) -> Result<(), Error> {
-    provision(db, MASTER_DB, &MASTER, &[]).await?;
+/// Creates `database` if missing and applies the `master` lane
+pub async fn provision_master(db: &Db, database: &str) -> Result<(), Error> {
+    provision(db, database, &MASTER, &[]).await?;
     Ok(())
 }
 
@@ -258,6 +258,7 @@ async fn provision(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use resysto_surrealdb::Grant;
     use surrealdb::types::{RecordId, Uuid, Value};
 
     use super::*;
@@ -308,13 +309,23 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
         }
     }
 
+    fn everything() -> Grant {
+        Grant {
+            organizations: None,
+            write: true,
+        }
+    }
+
     #[tokio::test]
     async fn a_provisioned_tenant_accepts_record_sessions() {
         let db = connect().await;
         let tenant = new_tenant(&db).await;
         let user = RecordId::new("account", Uuid::new_v7());
 
-        let session = db.record_session(&tenant, user.clone()).await.unwrap();
+        let session = db
+            .record_session(&tenant, user.clone(), &everything())
+            .await
+            .unwrap();
 
         let auth: Option<RecordId> = session
             .query("RETURN $auth")
@@ -368,7 +379,9 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
         assert_eq!(failed, [missing.as_str()]);
         for database in [&ready, &suspended] {
             let user = RecordId::new("account", Uuid::new_v7());
-            db.record_session(database, user).await.unwrap();
+            db.record_session(database, user, &everything())
+                .await
+                .unwrap();
         }
     }
 

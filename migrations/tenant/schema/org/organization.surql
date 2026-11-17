@@ -1,4 +1,6 @@
-DEFINE TABLE OVERWRITE organization SCHEMAFULL PERMISSIONS NONE;
+DEFINE TABLE OVERWRITE organization SCHEMAFULL PERMISSIONS
+    FOR select WHERE $token.org_all = true OR <string> id IN $token.org_scope
+    FOR create, update, delete WHERE $token.write = true AND $token.org_all = true;
 
 DEFINE FIELD OVERWRITE name ON organization TYPE string;
 DEFINE FIELD OVERWRITE parent ON organization TYPE option<record<organization>>;

@@ -2,7 +2,7 @@ mod error;
 mod extract;
 
 pub use error::{AppError, AppResult};
-pub use extract::{Path, Query, TenantDb, ValidatedJson};
+pub use extract::{Path, Query, TenantAccess, TenantDb, ValidatedJson};
 
 use serde::Serialize;
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 use validator::ValidationErrors;
@@ -18,10 +18,21 @@ pub enum AppError {
     ValidationFields(BTreeMap<String, Vec<String>>),
     #[error("authentication required")]
     Unauthorized,
+    #[error("forbidden")]
+    Forbidden,
+    /// The session has to prove a second factor first
+    #[error("a second factor is required")]
+    MfaRequired,
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
     Unprocessable(String),
+    /// `retry_after` in seconds, when the wait is known
+    #[error("{message}")]
+    TooManyRequests {
+        message: String,
+        retry_after: Option<u64>,
+    },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -36,8 +47,11 @@ impl IntoResponse for AppError {
                 (StatusCode::BAD_REQUEST, "validation_error")
             }
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+            Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            Self::MfaRequired => (StatusCode::FORBIDDEN, "mfa_required"),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, "unprocessable"),
+            Self::TooManyRequests { .. } => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             Self::Internal(error) => {
                 // the only place the details are visible
                 tracing::error!(error = ?error, "internal server error");
@@ -53,7 +67,17 @@ impl IntoResponse for AppError {
             }),
             _ => json!({ "error": { "type": kind, "message": self.to_string() } }),
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let Self::TooManyRequests {
+            retry_after: Some(seconds),
+            ..
+        } = self
+        {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        }
+        response
     }
 }
 

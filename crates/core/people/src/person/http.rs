@@ -1,4 +1,3 @@
-use axum::extract::FromRef;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -10,11 +9,7 @@ use serde::Deserialize;
 use super::model::{self, NewPerson, PersonError, PersonPatch, PersonRecord};
 
 /// The routes of `/t/{slug}/api/v1/people`
-pub fn router<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-    Db: FromRef<S>,
-{
+pub fn router() -> Router<Db> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/{id}", get(read).patch(update).delete(delete))
@@ -67,6 +62,7 @@ impl From<PersonError> for AppError {
     fn from(error: PersonError) -> Self {
         match error {
             PersonError::NotFound => Self::NotFound,
+            PersonError::Forbidden => Self::Forbidden,
             PersonError::OrganizationsNotFound(_) => Self::Unprocessable(error.to_string()),
             PersonError::Db(error) => Self::Internal(error.into()),
         }

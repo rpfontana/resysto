@@ -181,10 +181,28 @@ pub(super) async fn uses(
     Ok(rows.into_iter().map(|row| (row.table, row.count)).collect())
 }
 
-/// Deletes the organization; ON DELETE REJECT refuses it while a record carries it
-pub(super) async fn delete(db: &impl Executor, id: OrganizationId) -> Result<(), Error> {
-    db.query("DELETE $id").bind(("id", id)).await?.check()?;
-    Ok(())
+/// Whether the organization went; ON DELETE REJECT refuses it while a record carries it
+pub(super) async fn delete(db: &impl Executor, id: OrganizationId) -> Result<bool, Error> {
+    let deleted: Option<OrganizationId> = db
+        .query("DELETE ONLY $id RETURN VALUE $before.id")
+        .bind(("id", id))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(deleted.is_some())
+}
+
+pub(super) async fn below(
+    db: &impl Executor,
+    organizations: &[OrganizationId],
+) -> Result<Vec<OrganizationId>, Error> {
+    let below: Vec<OrganizationId> = db
+        .query("SELECT VALUE id FROM organization WHERE path CONTAINSANY $organizations")
+        .bind(("organizations", organizations.to_vec()))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(below)
 }
 
 /// Replaces `from` with `to` in every record, a batch per transaction, and returns how many
@@ -199,10 +217,13 @@ pub(super) async fn reassign(
     write_in_batches(REASSIGN_BATCH, || {
         db.query(format!(
             "LET $batch = (SELECT VALUE <~(? LIMIT {REASSIGN_BATCH}) FROM ONLY $from);
-             UPDATE $batch SET organization_ids = array::distinct(
+             LET $moved = (UPDATE $batch SET organization_ids = array::distinct(
                  array::map(organization_ids, |$id| IF $id = $from THEN $to ELSE $id END)
-             ) RETURN NONE;
-             RETURN $batch;"
+             ) RETURN VALUE id);
+             IF array::len($moved) < array::len($batch) {{
+                 THROW 'the session may not write every record of the organization';
+             }};
+             RETURN $moved;"
         ))
         .bind(("from", from))
         .bind(("to", to))

@@ -1,0 +1,10 @@
+namespace Resysto {
+    entity Tenant;
+    entity Role;
+    entity Account in [Role] = { whole_tenant: Bool };
+    // the REST resource a request's path names, such as people or organizations
+    entity Resource in [Tenant];
+
+    action "read", "write", "delete"
+        appliesTo { principal: [Account], resource: [Resource] };
+}

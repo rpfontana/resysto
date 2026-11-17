@@ -1,6 +1,6 @@
 //! Organizations: the types, the rules of the tree and the operations that apply them
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use resysto_model::{Country, Email, OrganizationId};
 use resysto_surrealdb::{Page, PageRequest, Tx, transaction};
@@ -170,6 +170,8 @@ pub enum OrganizationError {
     SameTarget,
     #[error("target organization not found")]
     TargetNotFound,
+    #[error("outside what the session may write")]
+    Forbidden,
     #[error(transparent)]
     Db(#[from] resysto_surrealdb::Error),
 }
@@ -214,7 +216,7 @@ pub async fn create(
     };
     store::insert(db, OrganizationId::new(), content)
         .await?
-        .ok_or(OrganizationError::NotFound)
+        .ok_or(OrganizationError::Forbidden)
 }
 
 pub async fn get(
@@ -294,7 +296,7 @@ async fn update_in(
     patch.apply(&mut content);
     Ok(store::merge(tx, id, content)
         .await?
-        .ok_or(OrganizationError::NotFound))
+        .ok_or(OrganizationError::Forbidden))
 }
 
 /// Moves every record of `from` to `to` and returns how many moved
@@ -315,6 +317,20 @@ pub async fn reassign(
     Ok(store::reassign(db, from, to).await?)
 }
 
+/// The organizations and every organization below them; an id with no organization stays in
+pub async fn with_branches(
+    db: &Surreal<Any>,
+    organizations: Vec<OrganizationId>,
+) -> Result<Vec<OrganizationId>, OrganizationError> {
+    let below = store::below(db, &organizations).await?;
+    let mut seen = BTreeSet::new();
+    Ok(organizations
+        .into_iter()
+        .chain(below)
+        .filter(|id| seen.insert(*id))
+        .collect())
+}
+
 /// Deletes an organization that has no children and no records
 pub async fn delete(db: &Surreal<Any>, id: OrganizationId) -> Result<(), OrganizationError> {
     if !store::exists(db, id).await? {
@@ -328,7 +344,8 @@ pub async fn delete(db: &Surreal<Any>, id: OrganizationId) -> Result<(), Organiz
         return Err(OrganizationError::InUse(uses));
     }
     match store::delete(db, id).await {
-        Ok(()) => Ok(()),
+        Ok(true) => Ok(()),
+        Ok(false) => Err(OrganizationError::Forbidden),
         // a record tagged since the check makes the database refuse the delete
         Err(error) => {
             let uses = store::uses(db, id).await?;
@@ -432,7 +449,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::Db;
+    use resysto_surrealdb::{Db, Grant};
     use secrecy::SecretString;
     use surrealdb::types::{RecordId, Uuid};
 
@@ -460,7 +477,7 @@ mod tests {
     }
 
     // a new tenant with the whole tenant lane, plus a table that tags its rows like every BC will
-    async fn tenant() -> Surreal<Any> {
+    async fn provisioned() -> (Db, String) {
         let Config { db, auth } = resysto_config::load().unwrap();
         let server = Db::connect(resysto_surrealdb::Config {
             endpoint: db.endpoint,
@@ -476,17 +493,39 @@ mod tests {
         resysto_migrator::provision_tenant(&server, &name)
             .await
             .unwrap();
-        let db = server.system_session(&name).await.unwrap();
-        db.query(
-            "DEFINE TABLE item SCHEMAFULL;
-             DEFINE FIELD organization_ids ON item TYPE array<record<organization>>
-                 REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;",
-        )
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-        db
+        server
+            .system_session(&name)
+            .await
+            .unwrap()
+            .query(
+                "DEFINE TABLE item SCHEMAFULL PERMISSIONS FULL;
+                 DEFINE FIELD organization_ids ON item TYPE array<record<organization>>
+                     REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;",
+            )
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        (server, name)
+    }
+
+    async fn session(
+        server: &Db,
+        name: &str,
+        organizations: Option<&[OrganizationId]>,
+    ) -> Surreal<Any> {
+        let grant = Grant {
+            organizations: organizations
+                .map(|ids| ids.iter().copied().map(RecordId::from).collect()),
+            write: true,
+        };
+        let member = RecordId::new("account", Uuid::new_v7());
+        server.record_session(name, member, &grant).await.unwrap()
+    }
+
+    async fn tenant() -> Surreal<Any> {
+        let (server, name) = provisioned().await;
+        session(&server, &name, None).await
     }
 
     async fn add(
@@ -766,5 +805,55 @@ mod tests {
             matches!(ghost, Err(OrganizationError::TargetNotFound)),
             "{ghost:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_scoped_session_sees_its_branches_and_changes_no_organization() {
+        let (server, name) = provisioned().await;
+        let admin = session(&server, &name, None).await;
+        let root = add(&admin, "root", None).await;
+        let milano = add(&admin, "milano", Some(&root)).await;
+        let sede = add(&admin, "sede", Some(&milano)).await;
+        let roma = add(&admin, "roma", Some(&root)).await;
+        let ghost = OrganizationId::new();
+
+        let reached = with_branches(&admin, vec![milano.id, ghost]).await.unwrap();
+        assert_eq!(reached, vec![milano.id, ghost, sede.id]);
+
+        let scoped = session(&server, &name, Some(&reached)).await;
+        let seen: Vec<OrganizationId> = list(&scoped, PageRequest::default())
+            .await
+            .unwrap()
+            .data
+            .into_iter()
+            .map(|organization| organization.id)
+            .collect();
+        assert_eq!(seen, vec![milano.id, sede.id]);
+        assert!(matches!(
+            get(&scoped, roma.id).await,
+            Err(OrganizationError::NotFound)
+        ));
+
+        let child = NewOrganization {
+            name: "ufficio".into(),
+            parent: Some(sede.id),
+            ..Default::default()
+        };
+        let rename = OrganizationPatch {
+            name: Some("sede nuova".into()),
+            ..Default::default()
+        };
+        let refusals = [
+            ("create", create(&scoped, child).await.err()),
+            ("update", update(&scoped, sede.id, rename).await.err()),
+            ("delete", delete(&scoped, sede.id).await.err()),
+        ];
+        for (operation, refused) in refusals {
+            assert!(
+                matches!(refused, Some(OrganizationError::Forbidden)),
+                "{operation}: {refused:?}"
+            );
+        }
+        assert_eq!(get(&admin, sede.id).await.unwrap().name, "sede");
     }
 }

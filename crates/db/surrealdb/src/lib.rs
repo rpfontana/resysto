@@ -24,7 +24,7 @@ use tokio::sync::RwLock;
 pub const MASTER_DB: &str = "__master";
 
 const ACCESS: &str = "app";
-const TOKEN_TTL_SECS: u64 = 15 * 60;
+const TOKEN_TTL_SECS: u64 = 60;
 
 /// How long a namespace user's token serves new sessions before a new signin; it must stay below
 /// the user's `DURATION FOR TOKEN`, 1h by default
@@ -67,6 +67,14 @@ struct System {
     renew_at: Instant,
 }
 
+/// What a record session reaches; the database's `PERMISSIONS` read it from the token
+#[derive(Debug, Clone, PartialEq)]
+pub struct Grant {
+    /// The organizations whose records the session sees; `None` sees the whole tenant
+    pub organizations: Option<Vec<RecordId>>,
+    pub write: bool,
+}
+
 /// Errors returned by [`Db`]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -105,6 +113,9 @@ struct Claims<'a> {
     id: String,
     iat: u64,
     exp: u64,
+    org_all: bool,
+    org_scope: Vec<String>,
+    write: bool,
 }
 
 impl Db {
@@ -186,14 +197,20 @@ impl Db {
         &self,
         database: &str,
         user: impl Into<RecordId>,
+        grant: &Grant,
     ) -> Result<Surreal<Any>, Error> {
-        let token = self.record_token(database, &user.into())?;
+        let token = self.record_token(database, &user.into(), grant)?;
         let session = self.0.bare.clone();
         session.authenticate(token).await?;
         Ok(session)
     }
 
-    fn record_token(&self, database: &str, user: &RecordId) -> Result<String, Error> {
+    fn record_token(
+        &self,
+        database: &str,
+        user: &RecordId,
+        grant: &Grant,
+    ) -> Result<String, Error> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -204,6 +221,14 @@ impl Db {
             id: user.to_sql(),
             iat: now,
             exp: now + TOKEN_TTL_SECS,
+            org_all: grant.organizations.is_none(),
+            org_scope: grant
+                .organizations
+                .iter()
+                .flatten()
+                .map(ToSql::to_sql)
+                .collect(),
+            write: grant.write,
         };
         Ok(jsonwebtoken::encode(
             &Header::new(Algorithm::ES256),
@@ -315,6 +340,13 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         session.query("INFO FOR DB").await.unwrap().take(0).unwrap()
     }
 
+    fn everything() -> Grant {
+        Grant {
+            organizations: None,
+            write: true,
+        }
+    }
+
     async fn whoami(session: &Surreal<Any>) -> (Option<RecordId>, Option<String>) {
         let mut response = session
             .query("RETURN $auth; RETURN session::db();")
@@ -330,8 +362,14 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         let alice = RecordId::new("account", Uuid::new_v7());
         let bob = RecordId::new("account", Uuid::new_v7());
 
-        let as_alice = db.record_session(&tenant, alice.clone()).await.unwrap();
-        let as_bob = db.record_session(&tenant, bob.clone()).await.unwrap();
+        let as_alice = db
+            .record_session(&tenant, alice.clone(), &everything())
+            .await
+            .unwrap();
+        let as_bob = db
+            .record_session(&tenant, bob.clone(), &everything())
+            .await
+            .unwrap();
 
         assert_eq!(whoami(&as_alice).await, (Some(alice), Some(tenant.clone())));
         assert_eq!(whoami(&as_bob).await, (Some(bob), Some(tenant.clone())));
@@ -344,7 +382,12 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         let tenant = new_tenant(&connect().await).await;
         let forger = connect_signing_with(OTHER_SIGNING_KEY).await;
         let user = RecordId::new("account", Uuid::new_v7());
-        assert!(forger.record_session(&tenant, user).await.is_err());
+        assert!(
+            forger
+                .record_session(&tenant, user, &everything())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -362,7 +405,11 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
             .unwrap();
 
         let session = db
-            .record_session(&tenant, RecordId::new("account", Uuid::new_v7()))
+            .record_session(
+                &tenant,
+                RecordId::new("account", Uuid::new_v7()),
+                &everything(),
+            )
             .await
             .unwrap();
 

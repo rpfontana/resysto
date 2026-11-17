@@ -11,3 +11,5 @@ RESYSTO_DB__APP_PASSWORD_FILE = { value = ".secrets/db_app_password", relative =
 
 RESYSTO_AUTH__SIGNING_KEY_FILE = { value = ".secrets/auth_signing_key.pem", relative = true }
 RESYSTO_AUTH__VERIFYING_KEY_FILE = { value = ".secrets/auth_verifying_key.pem", relative = true }
+RESYSTO_AUTH__PASSWORD_PEPPER_FILE = { value = ".secrets/auth_password_pepper", relative = true }
+RESYSTO_AUTH__ENCRYPTION_KEY_FILE = { value = ".secrets/auth_encryption_key", relative = true }

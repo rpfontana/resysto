@@ -1,10 +1,10 @@
 use axum::extract::{FromRef, FromRequest, FromRequestParts, Request};
 use axum::http::request::Parts;
-use resysto_surrealdb::{Db, MASTER_DB};
-use serde::Deserialize;
+use resysto_surrealdb::{Db, Grant};
 use serde::de::DeserializeOwned;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use surrealdb::types::RecordId;
 use validator::Validate;
 
 use crate::AppError;
@@ -37,13 +37,17 @@ where
     }
 }
 
-/// A session on the database of the tenant the `{slug}` of the path names
-pub struct TenantDb(pub Surreal<Any>);
-
-#[derive(Deserialize)]
-struct TenantPath {
-    slug: String,
+/// Where an authenticated and authorized request may go in its tenant, which the server's
+/// middleware puts in the request extensions
+#[derive(Debug, Clone)]
+pub struct TenantAccess {
+    pub database: String,
+    pub account: RecordId,
+    pub grant: Grant,
 }
+
+/// A record session on the tenant's database, limited by the grant of the request
+pub struct TenantDb(pub Surreal<Any>);
 
 impl<S> FromRequestParts<S> for TenantDb
 where
@@ -53,107 +57,42 @@ where
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Path(TenantPath { slug }) =
-            Path::<TenantPath>::from_request_parts(parts, state).await?;
-        let server = Db::from_ref(state);
-        let master = server.system_session(MASTER_DB).await.map_err(internal)?;
-        let database = tenant_database(&master, &slug)
+        let access = parts
+            .extensions
+            .get::<TenantAccess>()
+            .ok_or(AppError::Unauthorized)?;
+        let db = Db::from_ref(state)
+            .record_session(&access.database, access.account.clone(), &access.grant)
             .await
-            .map_err(internal)?
-            .ok_or(AppError::NotFound)?;
-        let db = server.system_session(&database).await.map_err(internal)?;
+            .map_err(|error| AppError::Internal(error.into()))?;
         Ok(Self(db))
     }
 }
 
-// only a ready tenant is reachable: a suspended or deleted one reads as missing
-async fn tenant_database(
-    master: &Surreal<Any>,
-    slug: &str,
-) -> Result<Option<String>, surrealdb::Error> {
-    let database: Option<String> = master
-        .query(
-            "SELECT VALUE db_name FROM ONLY tenant WHERE slug = $slug AND state = 'ready' LIMIT 1",
-        )
-        .bind(("slug", slug.to_owned()))
-        .await?
-        .check()?
-        .take(0)?;
-    Ok(database)
-}
-
-fn internal(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
-    AppError::Internal(error.into())
-}
-
 #[cfg(test)]
 mod tests {
-    use secrecy::SecretString;
-    use surrealdb::types::Uuid;
+    use axum::http::Request;
 
     use super::*;
 
-    #[derive(Deserialize)]
-    struct Config {
-        db: DbConfig,
-        auth: AuthConfig,
-    }
+    struct Unreachable;
 
-    #[derive(Deserialize)]
-    struct DbConfig {
-        endpoint: String,
-        namespace: String,
-        migrator_user: String,
-        migrator_password: SecretString,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthConfig {
-        signing_key: SecretString,
-        verifying_key: String,
-    }
-
-    // a database standing in for the master, with its own tenant rows
-    async fn master() -> Surreal<Any> {
-        let Config { db, auth } = resysto_config::load().unwrap();
-        let server = Db::connect(resysto_surrealdb::Config {
-            endpoint: db.endpoint,
-            namespace: db.namespace,
-            username: db.migrator_user,
-            password: db.migrator_password,
-            signing_key: auth.signing_key,
-            verifying_key: auth.verifying_key,
-        })
-        .await
-        .unwrap();
-        let name = format!("t_test_{}", Uuid::new_v4().simple());
-        server.define_database(&name).await.unwrap();
-        server.system_session(&name).await.unwrap()
+    impl FromRef<Unreachable> for Db {
+        fn from_ref(_: &Unreachable) -> Self {
+            panic!("a request without authentication reached the database");
+        }
     }
 
     #[tokio::test]
-    async fn a_slug_reaches_only_a_ready_tenant() {
-        let master = master().await;
-        master
-            .query(
-                "CREATE tenant SET slug = 'acme', db_name = 't_acme', state = 'ready';
-                 CREATE tenant SET slug = 'paused', db_name = 't_paused', state = 'suspended';
-                 CREATE tenant SET slug = 'gone', db_name = 't_gone', state = 'deleted';",
-            )
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
+    async fn a_request_without_authentication_never_reaches_a_tenant() {
+        let (mut parts, ()) = Request::new(()).into_parts();
 
-        let cases = [
-            ("acme", Some("t_acme")),
-            ("paused", None),
-            ("gone", None),
-            ("nobody", None),
-        ];
-        for (slug, database) in cases {
-            let found = tenant_database(&master, slug).await.unwrap();
-            assert_eq!(found.as_deref(), database, "slug {slug}");
-        }
+        let refused = TenantDb::from_request_parts(&mut parts, &Unreachable).await;
+
+        assert!(
+            matches!(refused, Err(AppError::Unauthorized)),
+            "{:?}",
+            refused.err()
+        );
     }
 }

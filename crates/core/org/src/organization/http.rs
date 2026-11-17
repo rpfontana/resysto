@@ -1,4 +1,3 @@
-use axum::extract::FromRef;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -12,12 +11,8 @@ use super::model::{
     self, NewOrganization, OrganizationError, OrganizationPatch, OrganizationRecord,
 };
 
-/// The routes of `/t/{slug}/api/v1/organizations`, for any state that holds a [`Db`]
-pub fn router<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-    Db: FromRef<S>,
-{
+/// The routes of `/t/{slug}/api/v1/organizations`
+pub fn router() -> Router<Db> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/{id}", get(read).patch(update).delete(delete))
@@ -92,6 +87,7 @@ impl From<OrganizationError> for AppError {
     fn from(error: OrganizationError) -> Self {
         match error {
             OrganizationError::NotFound => Self::NotFound,
+            OrganizationError::Forbidden => Self::Forbidden,
             OrganizationError::HasChildren | OrganizationError::InUse(_) => {
                 Self::Conflict(error.to_string())
             }

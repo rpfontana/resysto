@@ -16,8 +16,6 @@ tracing.workspace = true
 validator.workspace = true
 
 [dev-dependencies]
-resysto-config = { path = "../config" }
-secrecy.workspace = true
 tokio.workspace = true
 
 [lints]

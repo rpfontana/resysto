@@ -88,9 +88,15 @@ pub(super) async fn exists(db: &impl Executor, id: PersonId) -> Result<bool, Err
     Ok(exists == Some(true))
 }
 
-pub(super) async fn delete(db: &impl Executor, id: PersonId) -> Result<(), Error> {
-    db.query("DELETE $id").bind(("id", id)).await?.check()?;
-    Ok(())
+/// Whether the person went
+pub(super) async fn delete(db: &impl Executor, id: PersonId) -> Result<bool, Error> {
+    let deleted: Option<PersonId> = db
+        .query("DELETE ONLY $id RETURN VALUE $before.id")
+        .bind(("id", id))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(deleted.is_some())
 }
 
 impl From<PersonRecord> for Content {

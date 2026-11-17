@@ -21,4 +21,6 @@ pub(crate) struct Db {
 pub(crate) struct Auth {
     pub(crate) signing_key: SecretString,
     pub(crate) verifying_key: String,
+    pub(crate) password_pepper: SecretString,
+    pub(crate) encryption_key: SecretString,
 }

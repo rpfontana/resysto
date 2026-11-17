@@ -8,5 +8,5 @@ mod store;
 pub use http::router;
 pub use model::{
     Industry, MAX_DEPTH, NewOrganization, OrganizationError, OrganizationPatch, OrganizationRecord,
-    create, delete, get, list, reassign, update,
+    create, delete, get, list, reassign, update, with_branches,
 };

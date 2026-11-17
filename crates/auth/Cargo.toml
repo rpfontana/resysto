@@ -1,0 +1,35 @@
+[package]
+name = "resysto-auth"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+argon2.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+cedar-policy.workspace = true
+hex.workspace = true
+rand.workspace = true
+resysto-http = { path = "../http" }
+resysto-id = { path = "../id" }
+resysto-model = { path = "../model" }
+resysto-surrealdb = { path = "../db/surrealdb" }
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive"] }
+sha2.workspace = true
+surrealdb.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+totp-rs.workspace = true
+tracing.workspace = true
+unicode-normalization.workspace = true
+validator.workspace = true
+
+[dev-dependencies]
+resysto-config = { path = "../config" }
+resysto-migrator = { path = "../db/migrator" }
+
+[lints]
+workspace = true
