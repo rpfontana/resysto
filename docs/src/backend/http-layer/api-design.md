@@ -24,7 +24,9 @@ The status codes we reach for most often:
 | 403 | Forbidden | Authenticated but not authorized |
 | 404 | Not Found | Resource does not exist |
 | 409 | Conflict | Business rule violation (duplicate email, etc.) |
+| 412 | Precondition Failed | The `If-Match` names a version the record no longer has ([Concurrent Writes](concurrent-writes.md)) |
 | 422 | Unprocessable Entity | Semantically invalid request |
+| 428 | Precondition Required | An update or delete without `If-Match` |
 | 500 | Internal Server Error | Unexpected server failure |
 
 ## API versioning
@@ -78,6 +80,8 @@ pub struct Page<T> {
     pub next_cursor: Option<Cursor>,
 }
 ```
+
+A response with one record also carries the record's version as its `ETag` header, which the client sends back in `If-Match` to change or delete it ([Concurrent Writes](concurrent-writes.md)).
 
 Error responses use the format described in the [Error Handling](../core-patterns/error-handling.md) chapter. That way, clients can always check for an `error` field to determine whether the request succeeded.
 

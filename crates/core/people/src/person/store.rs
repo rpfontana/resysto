@@ -1,20 +1,7 @@
-use resysto_model::{Email, OrganizationId, PersonId};
+use resysto_model::{OrganizationId, PersonId};
 use resysto_surrealdb::{Error, Executor, Page, PageRequest, page};
-use surrealdb::types::SurrealValue;
 
-use super::model::PersonRecord;
-
-/// The fields a write sets; the database keeps the id and the timestamps
-#[derive(SurrealValue)]
-pub(super) struct Content {
-    pub(super) first_name: String,
-    pub(super) last_name: String,
-    pub(super) email: Option<Email>,
-    pub(super) phone: Option<String>,
-    pub(super) job_title: Option<String>,
-    pub(super) department: Option<String>,
-    pub(super) organization_ids: Vec<OrganizationId>,
-}
+use super::model::{Person, PersonRecord};
 
 pub(super) async fn find(db: &impl Executor, id: PersonId) -> Result<Option<PersonRecord>, Error> {
     let found: Option<PersonRecord> = db
@@ -50,42 +37,32 @@ pub(super) async fn missing_organizations(
 pub(super) async fn insert(
     db: &impl Executor,
     id: PersonId,
-    content: Content,
+    person: Person,
 ) -> Result<Option<PersonRecord>, Error> {
     let created: Option<PersonRecord> = db
-        .query("CREATE ONLY $id CONTENT $content")
+        .query("CREATE ONLY $id CONTENT $person")
         .bind(("id", id))
-        .bind(("content", content))
+        .bind(("person", person))
         .await?
         .check()?
         .take(0)?;
     Ok(created)
 }
 
-/// Replaces every field the content carries; a `None` removes the field
-pub(super) async fn merge(
+/// Writes every field of `person`, a `None` removes the field; the database keeps the rest
+pub(super) async fn update(
     db: &impl Executor,
     id: PersonId,
-    content: Content,
+    person: Person,
 ) -> Result<Option<PersonRecord>, Error> {
     let updated: Option<PersonRecord> = db
-        .query("UPDATE ONLY $id MERGE $content")
+        .query("UPDATE ONLY $id MERGE $person")
         .bind(("id", id))
-        .bind(("content", content))
+        .bind(("person", person))
         .await?
         .check()?
         .take(0)?;
     Ok(updated)
-}
-
-pub(super) async fn exists(db: &impl Executor, id: PersonId) -> Result<bool, Error> {
-    let exists: Option<bool> = db
-        .query("RETURN record::exists($id)")
-        .bind(("id", id))
-        .await?
-        .check()?
-        .take(0)?;
-    Ok(exists == Some(true))
 }
 
 /// Whether the person went
@@ -97,20 +74,6 @@ pub(super) async fn delete(db: &impl Executor, id: PersonId) -> Result<bool, Err
         .check()?
         .take(0)?;
     Ok(deleted.is_some())
-}
-
-impl From<PersonRecord> for Content {
-    fn from(record: PersonRecord) -> Self {
-        Self {
-            first_name: record.first_name,
-            last_name: record.last_name,
-            email: record.email,
-            phone: record.phone,
-            job_title: record.job_title,
-            department: record.department,
-            organization_ids: record.organization_ids,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -140,8 +103,8 @@ mod tests {
         id
     }
 
-    fn ada(organization: OrganizationId) -> Content {
-        Content {
+    fn ada(organization: OrganizationId) -> Person {
+        Person {
             first_name: "Ada".into(),
             last_name: "Lovelace".into(),
             email: None,
@@ -153,20 +116,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_merge_removes_the_fields_set_to_none() {
+    async fn an_update_removes_the_fields_set_to_none_and_raises_the_version() {
         let db = tenant().await;
         let acme = organization(&db).await;
         let id = PersonId::new();
-        insert(&db, id, ada(acme)).await.unwrap();
+        let created = insert(&db, id, ada(acme)).await.unwrap().unwrap();
 
-        let cleared = Content {
+        let cleared = Person {
             phone: None,
             ..ada(acme)
         };
-        merge(&db, id, cleared).await.unwrap();
+        update(&db, id, cleared).await.unwrap();
 
         let stored = find(&db, id).await.unwrap().unwrap();
-        assert_eq!(stored.phone, None);
+        assert_eq!(stored.data.phone, None);
+        assert_eq!(stored.version, created.version + 1);
+        assert_eq!(stored.created_at, created.created_at);
     }
 
     #[tokio::test]

@@ -53,7 +53,44 @@ fn ada(organizations: &[OrganizationId]) -> Value {
     json!({ "first_name": "Ada", "last_name": "Lovelace", "organization_ids": organizations })
 }
 
-// a request that the server's middleware already authenticated with `grant`
+// a request that the server's middleware already authenticated with `grant`; the answer's ETag too
+async fn send(
+    db: &Db,
+    grant: &Grant,
+    method: Method,
+    uri: &str,
+    if_match: Option<&str>,
+    body: Value,
+) -> (StatusCode, Option<String>, Value) {
+    let access = TenantAccess {
+        database: TENANT.into(),
+        account: RecordId::new("account", Uuid::new_v7()),
+        grant: grant.clone(),
+    };
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .extension(access);
+    if let Some(if_match) = if_match {
+        request = request.header(header::IF_MATCH, if_match);
+    }
+    let request = request.body(Body::from(body.to_string())).unwrap();
+    let response = person::router()
+        .with_state(db.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .map(|etag| etag.to_str().unwrap().to_owned());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, etag, body)
+}
+
 async fn call(
     db: &Db,
     grant: &Grant,
@@ -61,26 +98,21 @@ async fn call(
     uri: &str,
     body: Value,
 ) -> (StatusCode, Value) {
-    let access = TenantAccess {
-        database: TENANT.into(),
-        account: RecordId::new("account", Uuid::new_v7()),
-        grant: grant.clone(),
-    };
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .extension(access)
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let response = person::router()
-        .with_state(db.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    let (status, _, body) = send(db, grant, method, uri, None, body).await;
+    (status, body)
+}
+
+// a write made, as a client makes it, on the version it just read
+async fn write(
+    db: &Db,
+    grant: &Grant,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let (_, etag, _) = send(db, &everything(), Method::GET, uri, None, Value::Null).await;
+    let (status, _, body) = send(db, grant, method, uri, etag.as_deref(), body).await;
+    (status, body)
 }
 
 // the path of the new person
@@ -101,7 +133,7 @@ async fn a_person_belongs_only_to_organizations_that_exist() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let person = create(&db, &[acme, acme]).await;
-    let (status, _) = call(
+    let (status, _) = write(
         &db,
         &all,
         Method::PATCH,
@@ -157,7 +189,7 @@ async fn a_scoped_member_reads_and_writes_only_the_people_of_its_organizations()
         (Method::DELETE, &in_both, Value::Null, StatusCode::FORBIDDEN),
     ];
     for (method, uri, body, expected) in refusals {
-        let (status, answer) = call(&db, &scoped, method.clone(), uri, body).await;
+        let (status, answer) = write(&db, &scoped, method.clone(), uri, body).await;
         assert_eq!(status, expected, "{method} {uri}: {answer}");
     }
     let (_, kept) = call(&db, &everything(), Method::GET, &in_both, Value::Null).await;
@@ -166,4 +198,81 @@ async fn a_scoped_member_reads_and_writes_only_the_people_of_its_organizations()
     let reading = within(milano, false);
     let (status, _) = call(&db, &reading, Method::POST, "/", ada(&[milano])).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_write_on_a_version_already_changed_is_refused_and_changes_nothing() {
+    let db = tenant().await;
+    let acme = organization(&db).await;
+    let all = everything();
+    let (_, created_etag, created) = send(&db, &all, Method::POST, "/", None, ada(&[acme])).await;
+    let person = format!("/{}", created["data"]["id"].as_str().unwrap());
+    let read = created_etag.unwrap();
+    assert_eq!(read, format!("\"{}\"", created["data"]["version"]));
+
+    let ciso = json!({ "job_title": "CISO" });
+    let (status, _, _) = send(&db, &all, Method::PATCH, &person, None, ciso.clone()).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let (status, etag, _) = send(&db, &all, Method::PATCH, &person, Some(&read), ciso).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(etag.unwrap(), read);
+
+    // a second writer that read the person before the first one wrote
+    let cto = json!({ "job_title": "CTO" });
+    let (status, _, answer) = send(&db, &all, Method::PATCH, &person, Some(&read), cto).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{answer}");
+    let (status, _, _) = send(&db, &all, Method::DELETE, &person, Some(&read), Value::Null).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+
+    let (_, current, kept) = send(&db, &all, Method::GET, &person, None, Value::Null).await;
+    assert_eq!(kept["data"]["job_title"], "CISO");
+
+    let current = current.unwrap();
+    let (status, _, _) = send(
+        &db,
+        &all,
+        Method::DELETE,
+        &person,
+        Some(&current),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&db, &all, Method::GET, &person, Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_patch_that_is_not_one_clean_change_is_refused() {
+    let db = tenant().await;
+    let acme = organization(&db).await;
+    let person = create(&db, &[acme]).await;
+    let all = everything();
+    let (_, etag, _) = send(&db, &all, Method::GET, &person, None, Value::Null).await;
+    let etag = etag.unwrap();
+
+    let refusals = [
+        (etag.as_str(), json!(["Bob"])),
+        (etag.as_str(), json!({})),
+        (etag.as_str(), json!({ "phnoe": "06 123" })),
+        (etag.trim_matches('"'), json!({ "job_title": "CISO" })),
+    ];
+    for (if_match, body) in refusals {
+        let (status, _, answer) = send(
+            &db,
+            &all,
+            Method::PATCH,
+            &person,
+            Some(if_match),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{if_match} {body}: {answer}"
+        );
+    }
+    let (_, unchanged, _) = send(&db, &all, Method::GET, &person, None, Value::Null).await;
+    assert_eq!(unchanged.unwrap(), etag);
 }

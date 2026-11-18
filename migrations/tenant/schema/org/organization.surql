@@ -28,4 +28,6 @@ DEFINE FIELD OVERWRITE employee_count ON organization TYPE option<int>;
 DEFINE FIELD OVERWRITE created_at ON organization TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON organization TYPE datetime VALUE time::now();
 
+DEFINE FIELD OVERWRITE version ON organization TYPE int VALUE ($before ?? 0) + 1;
+
 DEFINE INDEX OVERWRITE organization_parent ON organization FIELDS parent;

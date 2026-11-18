@@ -10,6 +10,7 @@ axum = { workspace = true, features = ["macros"] }
 resysto-surrealdb = { path = "../db/surrealdb" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+serde_path_to_error.workspace = true
 surrealdb.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

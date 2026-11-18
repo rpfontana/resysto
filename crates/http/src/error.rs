@@ -25,6 +25,12 @@ pub enum AppError {
     MfaRequired,
     #[error("{0}")]
     Conflict(String),
+    /// A write without the `If-Match` it needs
+    #[error("If-Match is required: send the ETag of the record, from its last read")]
+    PreconditionRequired,
+    /// `If-Match` names a version the record no longer has
+    #[error("{0}")]
+    PreconditionFailed(String),
     #[error("{0}")]
     Unprocessable(String),
     /// `retry_after` in seconds, when the wait is known
@@ -50,6 +56,10 @@ impl IntoResponse for AppError {
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Self::MfaRequired => (StatusCode::FORBIDDEN, "mfa_required"),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            Self::PreconditionRequired => {
+                (StatusCode::PRECONDITION_REQUIRED, "precondition_required")
+            }
+            Self::PreconditionFailed(_) => (StatusCode::PRECONDITION_FAILED, "precondition_failed"),
             Self::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, "unprocessable"),
             Self::TooManyRequests { .. } => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             Self::Internal(error) => {

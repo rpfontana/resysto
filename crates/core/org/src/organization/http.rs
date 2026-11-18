@@ -1,15 +1,16 @@
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use resysto_http::{ApiResponse, AppError, AppResult, Path, Query, TenantDb, ValidatedJson};
+use resysto_http::{
+    ApiResponse, AppError, AppResult, IfMatch, Path, Query, Tagged, TenantDb, ValidatedJson,
+};
 use resysto_model::OrganizationId;
 use resysto_surrealdb::{Db, Page, PageRequest};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use super::model::{
-    self, NewOrganization, OrganizationError, OrganizationPatch, OrganizationRecord,
-};
+use super::model::{NewOrganization, OrganizationPatch, OrganizationRecord};
+use super::ops::{self, OrganizationError};
 
 /// The routes of `/t/{slug}/api/v1/organizations`
 pub fn router() -> Router<Db> {
@@ -26,6 +27,7 @@ struct ById {
 }
 
 #[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 struct Reassign {
     to: OrganizationId,
 }
@@ -39,32 +41,45 @@ async fn list(
     TenantDb(db): TenantDb,
     Query(request): Query<PageRequest>,
 ) -> AppResult<Json<Page<OrganizationRecord>>> {
-    Ok(Json(model::list(&db, request).await?))
+    Ok(Json(ops::list(&db, request).await?))
 }
 
 async fn create(
     TenantDb(db): TenantDb,
     ValidatedJson(input): ValidatedJson<NewOrganization>,
-) -> AppResult<(StatusCode, Json<ApiResponse<OrganizationRecord>>)> {
-    let data = model::create(&db, input).await?;
-    Ok((StatusCode::CREATED, Json(ApiResponse { data })))
+) -> AppResult<(StatusCode, Tagged<OrganizationRecord>)> {
+    let data = ops::create(&db, input).await?;
+    Ok((
+        StatusCode::CREATED,
+        Tagged {
+            version: data.version,
+            data,
+        },
+    ))
 }
 
 async fn read(
     TenantDb(db): TenantDb,
     Path(ById { id }): Path<ById>,
-) -> AppResult<Json<ApiResponse<OrganizationRecord>>> {
-    let data = model::get(&db, id).await?;
-    Ok(Json(ApiResponse { data }))
+) -> AppResult<Tagged<OrganizationRecord>> {
+    let data = ops::get(&db, id).await?;
+    Ok(Tagged {
+        version: data.version,
+        data,
+    })
 }
 
 async fn update(
     TenantDb(db): TenantDb,
     Path(ById { id }): Path<ById>,
+    IfMatch(version): IfMatch,
     ValidatedJson(patch): ValidatedJson<OrganizationPatch>,
-) -> AppResult<Json<ApiResponse<OrganizationRecord>>> {
-    let data = model::update(&db, id, patch).await?;
-    Ok(Json(ApiResponse { data }))
+) -> AppResult<Tagged<OrganizationRecord>> {
+    let data = ops::update(&db, id, version, patch).await?;
+    Ok(Tagged {
+        version: data.version,
+        data,
+    })
 }
 
 async fn reassign(
@@ -72,14 +87,18 @@ async fn reassign(
     Path(ById { id }): Path<ById>,
     ValidatedJson(body): ValidatedJson<Reassign>,
 ) -> AppResult<Json<ApiResponse<Reassigned>>> {
-    let reassigned = model::reassign(&db, id, body.to).await?;
+    let reassigned = ops::reassign(&db, id, body.to).await?;
     Ok(Json(ApiResponse {
         data: Reassigned { reassigned },
     }))
 }
 
-async fn delete(TenantDb(db): TenantDb, Path(ById { id }): Path<ById>) -> AppResult<StatusCode> {
-    model::delete(&db, id).await?;
+async fn delete(
+    TenantDb(db): TenantDb,
+    Path(ById { id }): Path<ById>,
+    IfMatch(version): IfMatch,
+) -> AppResult<StatusCode> {
+    ops::delete(&db, id, version).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -87,6 +106,8 @@ impl From<OrganizationError> for AppError {
     fn from(error: OrganizationError) -> Self {
         match error {
             OrganizationError::NotFound => Self::NotFound,
+            OrganizationError::Stale(_) => Self::PreconditionFailed(error.to_string()),
+            OrganizationError::NothingToChange => Self::Validation(error.to_string()),
             OrganizationError::Forbidden => Self::Forbidden,
             OrganizationError::HasChildren | OrganizationError::InUse(_) => {
                 Self::Conflict(error.to_string())

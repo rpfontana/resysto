@@ -52,7 +52,44 @@ fn within(organizations: &[OrganizationId]) -> Grant {
     }
 }
 
-// a request that the server's middleware already authenticated with `grant`
+// a request that the server's middleware already authenticated with `grant`; the answer's ETag too
+async fn send(
+    db: &Db,
+    grant: &Grant,
+    method: Method,
+    uri: &str,
+    if_match: Option<&str>,
+    body: Value,
+) -> (StatusCode, Option<String>, Value) {
+    let access = TenantAccess {
+        database: TENANT.into(),
+        account: RecordId::new("account", Uuid::new_v7()),
+        grant: grant.clone(),
+    };
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .extension(access);
+    if let Some(if_match) = if_match {
+        request = request.header(header::IF_MATCH, if_match);
+    }
+    let request = request.body(Body::from(body.to_string())).unwrap();
+    let response = organization::router()
+        .with_state(db.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .map(|etag| etag.to_str().unwrap().to_owned());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, etag, body)
+}
+
 async fn call(
     db: &Db,
     grant: &Grant,
@@ -60,26 +97,21 @@ async fn call(
     uri: &str,
     body: Value,
 ) -> (StatusCode, Value) {
-    let access = TenantAccess {
-        database: TENANT.into(),
-        account: RecordId::new("account", Uuid::new_v7()),
-        grant: grant.clone(),
-    };
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .extension(access)
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let response = organization::router()
-        .with_state(db.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    let (status, _, body) = send(db, grant, method, uri, None, body).await;
+    (status, body)
+}
+
+// a write made, as a client makes it, on the version it just read
+async fn write(
+    db: &Db,
+    grant: &Grant,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let (_, etag, _) = send(db, &everything(), Method::GET, uri, None, Value::Null).await;
+    let (status, _, body) = send(db, grant, method, uri, etag.as_deref(), body).await;
+    (status, body)
 }
 
 async fn add(db: &Db, parent: Option<OrganizationId>) -> OrganizationId {
@@ -112,7 +144,7 @@ async fn move_to(
     parent: Option<OrganizationId>,
 ) -> (StatusCode, Value) {
     let body = json!({ "parent": parent });
-    call(db, &everything(), Method::PATCH, &format!("/{id}"), body).await
+    write(db, &everything(), Method::PATCH, &format!("/{id}"), body).await
 }
 
 async fn tag(db: &Db, organizations: &[OrganizationId]) {
@@ -203,11 +235,12 @@ async fn updating_a_missing_organization_creates_nothing() {
     let db = tenant().await;
     let ghost = format!("/{}", OrganizationId::new());
 
-    let (status, _) = call(
+    let (status, _, _) = send(
         &db,
         &everything(),
         Method::PATCH,
         &ghost,
+        Some("\"1\""),
         json!({ "name": "ghost" }),
     )
     .await;
@@ -229,7 +262,7 @@ async fn only_an_organization_without_children_or_records_is_deleted() {
 
     for (id, case) in [(parent, "has children"), (child, "has records")] {
         let (status, answer) =
-            call(&db, &all, Method::DELETE, &format!("/{id}"), Value::Null).await;
+            write(&db, &all, Method::DELETE, &format!("/{id}"), Value::Null).await;
         assert_eq!(status, StatusCode::CONFLICT, "{case}: {answer}");
     }
 
@@ -243,15 +276,14 @@ async fn only_an_organization_without_children_or_records_is_deleted() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    for (id, expected) in [
-        (child, StatusCode::NO_CONTENT),
-        (parent, StatusCode::NO_CONTENT),
-        (parent, StatusCode::NOT_FOUND),
-    ] {
+    for id in [child, parent] {
         let (status, answer) =
-            call(&db, &all, Method::DELETE, &format!("/{id}"), Value::Null).await;
-        assert_eq!(status, expected, "{id}: {answer}");
+            write(&db, &all, Method::DELETE, &format!("/{id}"), Value::Null).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{id}: {answer}");
     }
+    let gone = format!("/{parent}");
+    let (status, _, _) = send(&db, &all, Method::DELETE, &gone, Some("\"1\""), Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -327,8 +359,42 @@ async fn a_scoped_member_sees_its_branches_and_changes_no_organization() {
         (Method::DELETE, sede_uri, Value::Null, StatusCode::FORBIDDEN),
     ];
     for (method, uri, body, expected) in refusals {
-        let (status, answer) = call(&db, &scoped, method.clone(), &uri, body).await;
+        let (status, answer) = write(&db, &scoped, method.clone(), &uri, body).await;
         assert_eq!(status, expected, "{method} {uri}: {answer}");
     }
     assert_eq!(read(&db, sede).await["name"], "acme");
+}
+
+#[tokio::test]
+async fn a_write_on_a_version_already_changed_is_refused_and_changes_nothing() {
+    let db = tenant().await;
+    let id = add(&db, None).await;
+    let uri = format!("/{id}");
+    let all = everything();
+    let (_, read_before, _) = send(&db, &all, Method::GET, &uri, None, Value::Null).await;
+    let read_before = read_before.unwrap();
+
+    let renamed = json!({ "name": "acme spa" });
+    let (status, _, _) = send(&db, &all, Method::PATCH, &uri, Some(&read_before), renamed).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let stale = [
+        (Method::PATCH, json!({ "name": "acme srl" })),
+        (Method::DELETE, Value::Null),
+    ];
+    for (method, body) in stale {
+        let (status, _, answer) =
+            send(&db, &all, method.clone(), &uri, Some(&read_before), body).await;
+        assert_eq!(
+            status,
+            StatusCode::PRECONDITION_FAILED,
+            "{method}: {answer}"
+        );
+    }
+    let (_, current, _) = send(&db, &all, Method::GET, &uri, None, Value::Null).await;
+    let nothing = json!({});
+    let (status, _, answer) =
+        send(&db, &all, Method::PATCH, &uri, current.as_deref(), nothing).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(read(&db, id).await["name"], "acme spa");
 }

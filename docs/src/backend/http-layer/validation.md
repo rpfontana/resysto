@@ -63,9 +63,15 @@ where
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(value) = Json::<T>::from_request(req, state)
+        let Json(body) = Json::<serde_json::Value>::from_request(req, state)
             .await
             .map_err(|e| AppError::Validation(format!("invalid JSON: {e}")))?;
+        // serde fills a struct from a JSON array too, field by field in order
+        if !body.is_object() {
+            return Err(AppError::Validation("the body must be a JSON object".into()));
+        }
+        let value: T = serde_path_to_error::deserialize(body)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
 
         value.validate().map_err(|e| {
             AppError::ValidationFields(format_validation_errors(&e))
@@ -113,6 +119,58 @@ async fn create_user(
     // The handler can focus on business logic.
     let user = state.user_service.register(payload).await?;
     Ok((StatusCode::CREATED, Json(user.into())))
+}
+```
+
+The body has to be a JSON object. Serde happily builds a struct from an array, taking the fields in order, so `["Bob"]` would set the first field of the struct. `serde_path_to_error` keeps the field name in the message (`name: invalid type: null, expected a string`) after the detour through `serde_json::Value`.
+
+## Strict inputs
+
+A request that doesn't say exactly one thing is refused, not interpreted. This matters most for agents: a client that believes it wrote something it didn't is worse than a client that gets a `400`.
+
+- **Unknown fields are an error.** Every input struct has `#[serde(deny_unknown_fields)]`. Without it, `{ "boi": "Security lead" }` would answer `200` and change nothing. Fields the server writes, such as `id`, `version` or `created_at`, count as unknown too.
+- **One way to clear a field.** An update is a JSON Merge Patch: an absent field stays as it is, `null` clears it. An empty or blank string is refused (`must not be blank, null clears it`), and text is trimmed before it's stored. Required fields can't be cleared: `null` on them is refused.
+- **An empty patch is an error.** `{}` changes nothing, so it's almost always a client bug.
+
+A merge patch needs three states per optional field (absent, `null`, a value), so those fields are `Option<Option<T>>`:
+
+```rust
+#[derive(Debug, Default, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct UserPatch {
+    // absent: keep; a value: set; null: refused
+    #[serde(default, deserialize_with = "present")]
+    #[validate(length(min = 2, max = 50, message = "from 2 to 50 characters"))]
+    pub name: Option<String>,
+    // absent: keep; a value: set; null: clear
+    #[serde(default, deserialize_with = "nullable")]
+    #[validate(
+        length(max = 500, message = "at most 500 characters"),
+        custom(function = "not_blank")
+    )]
+    pub bio: Option<Option<String>>,
+}
+```
+
+Plain serde can't tell absent from `null` on an `Option<Option<T>>`: it reads both as `None`. Two small helpers fix that. `#[serde(default)]` covers the absent field, and the helper only runs when the field is there:
+
+```rust
+/// A field a patch may set but not clear: `null` is refused
+pub fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// A field a patch may clear: `null` is `Some(None)`
+pub fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 ```
 

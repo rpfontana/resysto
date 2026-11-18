@@ -1,16 +1,10 @@
-//! Organizations: the types, the rules of the tree and the operations that apply them
+//! Organizations: the types and the rules of the tree
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use resysto_model::{Country, Email, OrganizationId};
-use resysto_surrealdb::{Page, PageRequest, Tx, transaction};
-use serde::{Deserialize, Deserializer, Serialize};
-use surrealdb::Surreal;
-use surrealdb::engine::any::Any;
-use surrealdb::types::{Datetime, SurrealValue};
+use resysto_model::input::{nullable, present, trimmed};
+use resysto_model::{Country, Email, OrganizationId, Record};
+use serde::{Deserialize, Serialize};
+use surrealdb::types::SurrealValue;
 use validator::{Validate, ValidationError};
-
-use super::store::{self, Content};
 
 /// How many levels an organization can sit below its root
 pub const MAX_DEPTH: usize = 5;
@@ -37,9 +31,8 @@ pub enum Industry {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, SurrealValue)]
-pub struct OrganizationRecord {
-    pub id: OrganizationId,
+#[derive(Debug, Clone, Default, PartialEq, Serialize, SurrealValue)]
+pub struct Organization {
     pub name: String,
     pub parent: Option<OrganizationId>,
     /// The ancestors from the root down to the parent
@@ -59,37 +52,65 @@ pub struct OrganizationRecord {
     pub industry: Option<Industry>,
     pub annual_income: Option<i64>,
     pub employee_count: Option<i64>,
-    pub created_at: Datetime,
-    pub updated_at: Datetime,
 }
+
+pub type OrganizationRecord = Record<resysto_model::Organization, Organization>;
 
 /// The body of a create
 #[derive(Debug, Clone, Default, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct NewOrganization {
     #[validate(custom(function = "organization_name"))]
     pub name: String,
     pub parent: Option<OrganizationId>,
     /// `true` when absent
     pub active: Option<bool>,
-    #[validate(length(max = 100, message = "at most 100 characters"))]
+    #[validate(
+        length(max = 100, message = "at most 100 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub org_type: Option<String>,
-    #[validate(length(max = 2000, message = "at most 2000 characters"))]
+    #[validate(
+        length(max = 2000, message = "at most 2000 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub description: Option<String>,
-    #[validate(length(max = 10000, message = "at most 10000 characters"))]
+    #[validate(
+        length(max = 10000, message = "at most 10000 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub notes: Option<String>,
     pub email: Option<Email>,
-    #[validate(length(max = 50, message = "at most 50 characters"))]
+    #[validate(
+        length(max = 50, message = "at most 50 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub phone: Option<String>,
-    #[validate(length(max = 500, message = "at most 500 characters"))]
+    #[validate(
+        length(max = 500, message = "at most 500 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub website: Option<String>,
-    #[validate(length(max = 500, message = "at most 500 characters"))]
+    #[validate(
+        length(max = 500, message = "at most 500 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub address: Option<String>,
-    #[validate(length(max = 200, message = "at most 200 characters"))]
+    #[validate(
+        length(max = 200, message = "at most 200 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub city: Option<String>,
-    #[validate(length(max = 20, message = "at most 20 characters"))]
+    #[validate(
+        length(max = 20, message = "at most 20 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub postal_code: Option<String>,
     pub country: Option<Country>,
-    #[validate(length(max = 50, message = "at most 50 characters"))]
+    #[validate(
+        length(max = 50, message = "at most 50 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub vat_number: Option<String>,
     pub industry: Option<Industry>,
     #[validate(range(min = 1, message = "must be at least 1"))]
@@ -99,7 +120,8 @@ pub struct NewOrganization {
 }
 
 /// The body of a JSON Merge Patch: an absent field stays, `null` clears it
-#[derive(Debug, Clone, Default, Deserialize, Validate)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OrganizationPatch {
     #[serde(default, deserialize_with = "present")]
     #[validate(custom(function = "organization_name"))]
@@ -110,35 +132,62 @@ pub struct OrganizationPatch {
     #[serde(default, deserialize_with = "present")]
     pub active: Option<bool>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 100, message = "at most 100 characters"))]
+    #[validate(
+        length(max = 100, message = "at most 100 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub org_type: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 2000, message = "at most 2000 characters"))]
+    #[validate(
+        length(max = 2000, message = "at most 2000 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub description: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 10000, message = "at most 10000 characters"))]
+    #[validate(
+        length(max = 10000, message = "at most 10000 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub notes: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
     pub email: Option<Option<Email>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 50, message = "at most 50 characters"))]
+    #[validate(
+        length(max = 50, message = "at most 50 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub phone: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 500, message = "at most 500 characters"))]
+    #[validate(
+        length(max = 500, message = "at most 500 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub website: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 500, message = "at most 500 characters"))]
+    #[validate(
+        length(max = 500, message = "at most 500 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub address: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 200, message = "at most 200 characters"))]
+    #[validate(
+        length(max = 200, message = "at most 200 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub city: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 20, message = "at most 20 characters"))]
+    #[validate(
+        length(max = 20, message = "at most 20 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub postal_code: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
     pub country: Option<Option<Country>>,
     #[serde(default, deserialize_with = "nullable")]
-    #[validate(length(max = 50, message = "at most 50 characters"))]
+    #[validate(
+        length(max = 50, message = "at most 50 characters"),
+        custom(function = "resysto_model::input::not_blank")
+    )]
     pub vat_number: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
     pub industry: Option<Option<Industry>>,
@@ -150,274 +199,84 @@ pub struct OrganizationPatch {
     pub employee_count: Option<Option<i64>>,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum OrganizationError {
-    #[error("organization not found")]
-    NotFound,
-    #[error("parent organization not found")]
-    ParentNotFound,
-    #[error("an organization cannot be its own parent")]
-    OwnParent,
-    #[error("an organization cannot move under one of its descendants")]
-    Cycle,
-    #[error("organizations nest at most {MAX_DEPTH} levels below their root")]
-    TooDeep,
-    #[error("the organization has child organizations")]
-    HasChildren,
-    #[error("the organization is still used by {}", uses_text(.0))]
-    InUse(BTreeMap<String, i64>),
-    #[error("an organization cannot be reassigned to itself")]
-    SameTarget,
-    #[error("target organization not found")]
-    TargetNotFound,
-    #[error("outside what the session may write")]
-    Forbidden,
-    #[error(transparent)]
-    Db(#[from] resysto_surrealdb::Error),
-}
-
-/// Creates an organization, at the root or under `parent`
-pub async fn create(
-    db: &Surreal<Any>,
-    input: NewOrganization,
-) -> Result<OrganizationRecord, OrganizationError> {
-    let path = match input.parent {
-        None => Vec::new(),
-        Some(parent) => {
-            let mut path = store::path(db, parent)
-                .await?
-                .ok_or(OrganizationError::ParentNotFound)?;
-            path.push(parent);
-            if path.len() > MAX_DEPTH {
-                return Err(OrganizationError::TooDeep);
-            }
-            path
-        }
-    };
-    let content = Content {
-        name: input.name.trim().to_owned(),
-        parent: input.parent,
-        path,
-        active: input.active.unwrap_or(true),
-        org_type: input.org_type,
-        description: input.description,
-        notes: input.notes,
-        email: input.email,
-        phone: input.phone,
-        website: input.website,
-        address: input.address,
-        city: input.city,
-        postal_code: input.postal_code,
-        country: input.country,
-        vat_number: input.vat_number,
-        industry: input.industry,
-        annual_income: input.annual_income,
-        employee_count: input.employee_count,
-    };
-    store::insert(db, OrganizationId::new(), content)
-        .await?
-        .ok_or(OrganizationError::Forbidden)
-}
-
-pub async fn get(
-    db: &Surreal<Any>,
-    id: OrganizationId,
-) -> Result<OrganizationRecord, OrganizationError> {
-    store::find(db, id)
-        .await?
-        .ok_or(OrganizationError::NotFound)
-}
-
-/// One page of the organizations, in creation order
-pub async fn list(
-    db: &Surreal<Any>,
-    request: PageRequest,
-) -> Result<Page<OrganizationRecord>, OrganizationError> {
-    Ok(store::list(db, request).await?)
-}
-
-/// Applies `patch`; a new parent moves the whole branch below the organization with it
-pub async fn update(
-    db: &Surreal<Any>,
-    id: OrganizationId,
-    patch: OrganizationPatch,
-) -> Result<OrganizationRecord, OrganizationError> {
-    transaction(db, |tx| {
-        let patch = patch.clone();
-        async move { update_in(&tx, id, patch).await }
-    })
-    .await?
-}
-
-// a refusal comes back as Ok(Err(..)): the checks run before any write, so committing is harmless
-async fn update_in(
-    tx: &Tx,
-    id: OrganizationId,
-    patch: OrganizationPatch,
-) -> Result<Result<OrganizationRecord, OrganizationError>, resysto_surrealdb::Error> {
-    let Some(current) = store::find(tx, id).await? else {
-        return Ok(Err(OrganizationError::NotFound));
-    };
-    let old_path = current.path.clone();
-    let mut content = Content::from(current);
-
-    if let Some(parent) = patch.parent
-        && parent != content.parent
-    {
-        let path = match parent {
-            None => Vec::new(),
-            Some(parent) if parent == id => return Ok(Err(OrganizationError::OwnParent)),
-            Some(parent) => {
-                let Some(mut path) = store::path(tx, parent).await? else {
-                    return Ok(Err(OrganizationError::ParentNotFound));
-                };
-                if path.contains(&id) {
-                    return Ok(Err(OrganizationError::Cycle));
-                }
-                path.push(parent);
-                path
-            }
-        };
-        // how many levels the branch has below the organization
-        let height = store::depths_below(tx, id)
-            .await?
-            .into_iter()
-            .filter_map(|depth| usize::try_from(depth).ok())
-            .max()
-            .map_or(0, |deepest| deepest.saturating_sub(old_path.len()));
-        if path.len() + height > MAX_DEPTH {
-            return Ok(Err(OrganizationError::TooDeep));
-        }
-        store::rehome_branch(tx, id, old_path, path.clone()).await?;
-        content.parent = parent;
-        content.path = path;
-    }
-
-    patch.apply(&mut content);
-    Ok(store::merge(tx, id, content)
-        .await?
-        .ok_or(OrganizationError::Forbidden))
-}
-
-/// Moves every record of `from` to `to` and returns how many moved
-pub async fn reassign(
-    db: &Surreal<Any>,
-    from: OrganizationId,
-    to: OrganizationId,
-) -> Result<u64, OrganizationError> {
-    if from == to {
-        return Err(OrganizationError::SameTarget);
-    }
-    if !store::exists(db, from).await? {
-        return Err(OrganizationError::NotFound);
-    }
-    if !store::exists(db, to).await? {
-        return Err(OrganizationError::TargetNotFound);
-    }
-    Ok(store::reassign(db, from, to).await?)
-}
-
-/// The organizations and every organization below them; an id with no organization stays in
-pub async fn with_branches(
-    db: &Surreal<Any>,
-    organizations: Vec<OrganizationId>,
-) -> Result<Vec<OrganizationId>, OrganizationError> {
-    let below = store::below(db, &organizations).await?;
-    let mut seen = BTreeSet::new();
-    Ok(organizations
-        .into_iter()
-        .chain(below)
-        .filter(|id| seen.insert(*id))
-        .collect())
-}
-
-/// Deletes an organization that has no children and no records
-pub async fn delete(db: &Surreal<Any>, id: OrganizationId) -> Result<(), OrganizationError> {
-    if !store::exists(db, id).await? {
-        return Err(OrganizationError::NotFound);
-    }
-    if store::has_children(db, id).await? {
-        return Err(OrganizationError::HasChildren);
-    }
-    let uses = store::uses(db, id).await?;
-    if !uses.is_empty() {
-        return Err(OrganizationError::InUse(uses));
-    }
-    match store::delete(db, id).await {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(OrganizationError::Forbidden),
-        // a record tagged since the check makes the database refuse the delete
-        Err(error) => {
-            let uses = store::uses(db, id).await?;
-            if uses.is_empty() {
-                Err(error.into())
-            } else {
-                Err(OrganizationError::InUse(uses))
-            }
+impl NewOrganization {
+    /// The organization this input describes, at `path` in the tree
+    pub(super) fn into_organization(self, path: Vec<OrganizationId>) -> Organization {
+        Organization {
+            name: self.name.trim().to_owned(),
+            parent: self.parent,
+            path,
+            active: self.active.unwrap_or(true),
+            org_type: trimmed(self.org_type),
+            description: trimmed(self.description),
+            notes: trimmed(self.notes),
+            email: self.email,
+            phone: trimmed(self.phone),
+            website: trimmed(self.website),
+            address: trimmed(self.address),
+            city: trimmed(self.city),
+            postal_code: trimmed(self.postal_code),
+            country: self.country,
+            vat_number: trimmed(self.vat_number),
+            industry: self.industry,
+            annual_income: self.annual_income,
+            employee_count: self.employee_count,
         }
     }
 }
 
 impl OrganizationPatch {
     // every field but the parent, which moves the branch and is handled before
-    fn apply(self, content: &mut Content) {
+    pub(super) fn apply(self, organization: &mut Organization) {
         if let Some(name) = self.name {
-            content.name = name.trim().to_owned();
+            organization.name = name.trim().to_owned();
         }
         if let Some(active) = self.active {
-            content.active = active;
+            organization.active = active;
         }
         if let Some(org_type) = self.org_type {
-            content.org_type = org_type;
+            organization.org_type = trimmed(org_type);
         }
         if let Some(description) = self.description {
-            content.description = description;
+            organization.description = trimmed(description);
         }
         if let Some(notes) = self.notes {
-            content.notes = notes;
+            organization.notes = trimmed(notes);
         }
         if let Some(email) = self.email {
-            content.email = email;
+            organization.email = email;
         }
         if let Some(phone) = self.phone {
-            content.phone = phone;
+            organization.phone = trimmed(phone);
         }
         if let Some(website) = self.website {
-            content.website = website;
+            organization.website = trimmed(website);
         }
         if let Some(address) = self.address {
-            content.address = address;
+            organization.address = trimmed(address);
         }
         if let Some(city) = self.city {
-            content.city = city;
+            organization.city = trimmed(city);
         }
         if let Some(postal_code) = self.postal_code {
-            content.postal_code = postal_code;
+            organization.postal_code = trimmed(postal_code);
         }
         if let Some(country) = self.country {
-            content.country = country;
+            organization.country = country;
         }
         if let Some(vat_number) = self.vat_number {
-            content.vat_number = vat_number;
+            organization.vat_number = trimmed(vat_number);
         }
         if let Some(industry) = self.industry {
-            content.industry = industry;
+            organization.industry = industry;
         }
         if let Some(annual_income) = self.annual_income {
-            content.annual_income = annual_income;
+            organization.annual_income = annual_income;
         }
         if let Some(employee_count) = self.employee_count {
-            content.employee_count = employee_count;
+            organization.employee_count = employee_count;
         }
     }
-}
-
-fn uses_text(uses: &BTreeMap<String, i64>) -> String {
-    let parts: Vec<String> = uses
-        .iter()
-        .map(|(table, count)| format!("{count} {table}"))
-        .collect();
-    parts.join(", ")
 }
 
 fn organization_name(value: &str) -> Result<(), ValidationError> {
@@ -427,24 +286,6 @@ fn organization_name(value: &str) -> Result<(), ValidationError> {
     } else {
         Err(ValidationError::new("name").with_message("from 2 to 200 characters".into()))
     }
-}
-
-// absent is None, null is refused
-fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
-
-// absent is None, null is Some(None)
-fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]
@@ -467,7 +308,7 @@ mod tests {
 
     #[test]
     fn a_patch_keeps_absent_fields_clears_nulls_and_sets_values() {
-        let mut content = Content {
+        let mut organization = Organization {
             name: "acme".into(),
             email: Some("info@acme.it".parse().unwrap()),
             phone: Some("06 123".into()),
@@ -476,28 +317,60 @@ mod tests {
         let patch: OrganizationPatch = serde_json::from_value(json!({
             "name": " Acme Spa ",
             "phone": null,
-            "city": "Roma",
+            "city": " Roma ",
             "industry": "real_estate",
         }))
         .unwrap();
 
-        patch.apply(&mut content);
+        patch.apply(&mut organization);
 
-        assert_eq!(content.name, "Acme Spa");
+        assert_eq!(organization.name, "Acme Spa");
         assert_eq!(
-            content.email.as_ref().map(Email::as_str),
+            organization.email.as_ref().map(Email::as_str),
             Some("info@acme.it")
         );
-        assert_eq!(content.phone, None);
-        assert_eq!(content.city.as_deref(), Some("Roma"));
-        assert_eq!(content.industry, Some(Industry::RealEstate));
+        assert_eq!(organization.phone, None);
+        assert_eq!(organization.city.as_deref(), Some("Roma"));
+        assert_eq!(organization.industry, Some(Industry::RealEstate));
     }
 
     #[test]
-    fn a_patch_cannot_clear_the_name_or_the_active_flag() {
-        for body in [r#"{ "name": null }"#, r#"{ "active": null }"#] {
-            let parsed = serde_json::from_str::<OrganizationPatch>(body);
-            assert!(parsed.is_err(), "accepted {body}");
+    fn an_input_refuses_what_it_cannot_apply_cleanly() {
+        fn refused<T: serde::de::DeserializeOwned + Validate>(body: &serde_json::Value) -> bool {
+            serde_json::from_value::<T>(body.clone())
+                .map_err(|error| error.to_string())
+                .and_then(|input| input.validate().map_err(|error| error.to_string()))
+                .is_err()
+        }
+        assert!(
+            !refused::<NewOrganization>(&json!({ "name": "acme" })),
+            "refused a valid organization"
+        );
+        let new_organizations = [
+            json!({ "name": "acme", "path": [] }),
+            json!({ "name": "acme", "version": 1 }),
+            json!({ "name": "acme", "city": "  " }),
+            json!({ "name": "acme", "notes": "" }),
+        ];
+        for body in new_organizations {
+            assert!(
+                refused::<NewOrganization>(&body),
+                "accepted the new organization {body}"
+            );
+        }
+        let patches = [
+            json!({ "name": null }),
+            json!({ "active": null }),
+            json!({ "path": [] }),
+            json!({ "version": 2 }),
+            json!({ "city": "  " }),
+            json!({ "notes": "" }),
+        ];
+        for body in patches {
+            assert!(
+                refused::<OrganizationPatch>(&body),
+                "accepted the patch {body}"
+            );
         }
     }
 }

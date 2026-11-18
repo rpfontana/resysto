@@ -2,37 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use resysto_model::{Country, Email, OrganizationId};
+use resysto_model::OrganizationId;
 use resysto_surrealdb::{Error, Executor, Page, PageRequest, page, write_in_batches};
 use surrealdb::types::SurrealValue;
 
-use super::model::{Industry, OrganizationRecord};
+use super::model::{Organization, OrganizationRecord};
 
 /// Records a reassign rewrites per transaction
 pub(super) const REASSIGN_BATCH: u32 = 500;
-
-/// The fields a write sets; the database keeps the id and the timestamps
-#[derive(Default, SurrealValue)]
-pub(super) struct Content {
-    pub(super) name: String,
-    pub(super) parent: Option<OrganizationId>,
-    pub(super) path: Vec<OrganizationId>,
-    pub(super) active: bool,
-    pub(super) org_type: Option<String>,
-    pub(super) description: Option<String>,
-    pub(super) notes: Option<String>,
-    pub(super) email: Option<Email>,
-    pub(super) phone: Option<String>,
-    pub(super) website: Option<String>,
-    pub(super) address: Option<String>,
-    pub(super) city: Option<String>,
-    pub(super) postal_code: Option<String>,
-    pub(super) country: Option<Country>,
-    pub(super) vat_number: Option<String>,
-    pub(super) industry: Option<Industry>,
-    pub(super) annual_income: Option<i64>,
-    pub(super) employee_count: Option<i64>,
-}
 
 #[derive(SurrealValue)]
 struct Use {
@@ -80,28 +57,28 @@ pub(super) async fn path(
 pub(super) async fn insert(
     db: &impl Executor,
     id: OrganizationId,
-    content: Content,
+    organization: Organization,
 ) -> Result<Option<OrganizationRecord>, Error> {
     let created: Option<OrganizationRecord> = db
-        .query("CREATE ONLY $id CONTENT $content")
+        .query("CREATE ONLY $id CONTENT $organization")
         .bind(("id", id))
-        .bind(("content", content))
+        .bind(("organization", organization))
         .await?
         .check()?
         .take(0)?;
     Ok(created)
 }
 
-/// Replaces every field the content carries; a `None` removes the field
-pub(super) async fn merge(
+/// Writes every field of `organization`, a `None` removes the field; the database keeps the rest
+pub(super) async fn update(
     db: &impl Executor,
     id: OrganizationId,
-    content: Content,
+    organization: Organization,
 ) -> Result<Option<OrganizationRecord>, Error> {
     let updated: Option<OrganizationRecord> = db
-        .query("UPDATE ONLY $id MERGE $content")
+        .query("UPDATE ONLY $id MERGE $organization")
         .bind(("id", id))
-        .bind(("content", content))
+        .bind(("organization", organization))
         .await?
         .check()?
         .take(0)?;
@@ -231,31 +208,6 @@ pub(super) async fn reassign(
     .await
 }
 
-impl From<OrganizationRecord> for Content {
-    fn from(record: OrganizationRecord) -> Self {
-        Self {
-            name: record.name,
-            parent: record.parent,
-            path: record.path,
-            active: record.active,
-            org_type: record.org_type,
-            description: record.description,
-            notes: record.notes,
-            email: record.email,
-            phone: record.phone,
-            website: record.website,
-            address: record.address,
-            city: record.city,
-            postal_code: record.postal_code,
-            country: record.country,
-            vat_number: record.vat_number,
-            industry: record.industry,
-            annual_income: record.annual_income,
-            employee_count: record.employee_count,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use resysto_surrealdb::Db;
@@ -263,6 +215,7 @@ mod tests {
     use surrealdb::engine::any::Any;
     use surrealdb::types::RecordId;
 
+    use super::super::model::Industry;
     use super::*;
 
     // a tenant plus a table that tags its rows like every bounded context does
@@ -287,12 +240,12 @@ mod tests {
 
     async fn organization(db: &Surreal<Any>) -> OrganizationId {
         let id = OrganizationId::new();
-        let content = Content {
+        let acme = Organization {
             name: "acme".into(),
             phone: Some("06 123".into()),
             ..Default::default()
         };
-        insert(db, id, content).await.unwrap().unwrap();
+        insert(db, id, acme).await.unwrap().unwrap();
         id
     }
 
@@ -320,17 +273,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_merge_writes_the_content_and_removes_the_fields_set_to_none() {
+    async fn an_update_writes_the_organization_and_removes_the_fields_set_to_none() {
         let db = tenant().await;
         let id = organization(&db).await;
-        let mut content = Content::from(find(&db, id).await.unwrap().unwrap());
-        content.phone = None;
+        let mut acme = find(&db, id).await.unwrap().unwrap().data;
+        acme.phone = None;
         // a variant of two words, in the form the schema's literal union lists
-        content.industry = Some(Industry::RealEstate);
+        acme.industry = Some(Industry::RealEstate);
 
-        merge(&db, id, content).await.unwrap();
+        update(&db, id, acme).await.unwrap();
 
-        let stored = find(&db, id).await.unwrap().unwrap();
+        let stored = find(&db, id).await.unwrap().unwrap().data;
         assert_eq!(stored.phone, None);
         assert_eq!(stored.industry, Some(Industry::RealEstate));
     }

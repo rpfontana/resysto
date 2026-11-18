@@ -6,7 +6,7 @@ publish.workspace = true
 
 [dependencies]
 resysto-id = { path = "../id" }
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 surrealdb-types.workspace = true
 validator.workspace = true
 

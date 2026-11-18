@@ -1,0 +1,13 @@
+title = "person.version and organization.version"
+
+[[expand]]
+migrate = "DEFINE FIELD OVERWRITE version ON person TYPE int MIGRATE EXISTING ROWS AS add_person_version USING 1"
+
+[[expand]]
+schema = "people/person.surql"
+
+[[expand]]
+migrate = "DEFINE FIELD OVERWRITE version ON organization TYPE int MIGRATE EXISTING ROWS AS add_organization_version USING 1"
+
+[[expand]]
+schema = "org/organization.surql"

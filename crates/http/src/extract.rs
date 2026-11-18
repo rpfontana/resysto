@@ -1,4 +1,5 @@
 use axum::extract::{FromRef, FromRequest, FromRequestParts, Request};
+use axum::http::header;
 use axum::http::request::Parts;
 use resysto_surrealdb::{Db, Grant};
 use serde::de::DeserializeOwned;
@@ -19,7 +20,7 @@ pub struct Path<T>(pub T);
 #[from_request(via(axum::extract::Query), rejection(AppError))]
 pub struct Query<T>(pub T);
 
-/// A JSON body that deserialized and passed its `Validate` rules
+/// A JSON object body that deserialized and passed its `Validate` rules
 #[derive(Debug)]
 pub struct ValidatedJson<T>(pub T);
 
@@ -31,9 +32,43 @@ where
     type Rejection = AppError;
 
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let axum::Json(value) = axum::Json::<T>::from_request(request, state).await?;
+        let axum::Json(body) =
+            axum::Json::<serde_json::Value>::from_request(request, state).await?;
+        // serde reads a struct from an array too, field by field in order
+        if !body.is_object() {
+            return Err(AppError::Validation(
+                "the body must be a JSON object".into(),
+            ));
+        }
+        let value: T = serde_path_to_error::deserialize(body)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
         value.validate()?;
         Ok(Self(value))
+    }
+}
+
+/// The version a write expects, from `If-Match: "3"`, the `ETag` of the record's last read
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IfMatch(pub i64);
+
+impl<S: Send + Sync> FromRequestParts<S> for IfMatch {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let value = parts
+            .headers
+            .get(header::IF_MATCH)
+            .ok_or(AppError::PreconditionRequired)?;
+        value
+            .to_str()
+            .ok()
+            .and_then(|value| value.strip_prefix('"')?.strip_suffix('"')?.parse().ok())
+            .map(Self)
+            .ok_or_else(|| {
+                AppError::Validation(
+                    r#"If-Match must be the ETag of the record, such as "3""#.into(),
+                )
+            })
     }
 }
 

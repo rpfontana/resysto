@@ -14,3 +14,5 @@ DEFINE FIELD OVERWRITE organization_ids ON person TYPE array<record<organization
     REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;
 DEFINE FIELD OVERWRITE created_at ON person TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON person TYPE datetime VALUE time::now();
+
+DEFINE FIELD OVERWRITE version ON person TYPE int VALUE ($before ?? 0) + 1;
