@@ -14,7 +14,6 @@ use crate::config::Config;
 use crate::state::AppState;
 
 pub async fn serve() -> anyhow::Result<()> {
-
     let Config {
         addr,
         site,

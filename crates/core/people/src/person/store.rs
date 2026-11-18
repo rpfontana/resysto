@@ -112,3 +112,76 @@ impl From<PersonRecord> for Content {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use resysto_surrealdb::Db;
+    use surrealdb::Surreal;
+    use surrealdb::engine::any::Any;
+
+    use super::*;
+
+    async fn tenant() -> Surreal<Any> {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, "t_acme")
+            .await
+            .unwrap();
+        db.system_session("t_acme").await.unwrap()
+    }
+
+    async fn organization(db: &Surreal<Any>) -> OrganizationId {
+        let id = OrganizationId::new();
+        db.query("CREATE $id SET name = 'acme', path = []")
+            .bind(("id", id))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        id
+    }
+
+    fn ada(organization: OrganizationId) -> Content {
+        Content {
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+            email: None,
+            phone: Some("06 123".into()),
+            job_title: None,
+            department: None,
+            organization_ids: vec![organization],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_merge_removes_the_fields_set_to_none() {
+        let db = tenant().await;
+        let acme = organization(&db).await;
+        let id = PersonId::new();
+        insert(&db, id, ada(acme)).await.unwrap();
+
+        let cleared = Content {
+            phone: None,
+            ..ada(acme)
+        };
+        merge(&db, id, cleared).await.unwrap();
+
+        let stored = find(&db, id).await.unwrap().unwrap();
+        assert_eq!(stored.phone, None);
+    }
+
+    #[tokio::test]
+    async fn an_organization_with_people_cannot_be_deleted() {
+        let db = tenant().await;
+        let acme = organization(&db).await;
+        insert(&db, PersonId::new(), ada(acme)).await.unwrap();
+
+        let deleted = db
+            .query("DELETE $id")
+            .bind(("id", acme))
+            .await
+            .unwrap()
+            .check();
+
+        assert!(deleted.is_err(), "deleted an organization that has people");
+    }
+}

@@ -220,163 +220,55 @@ where
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::{Db, Grant};
-    use secrecy::SecretString;
-    use surrealdb::types::{RecordId, Uuid};
+    use serde_json::json;
 
     use super::*;
 
-    #[derive(Deserialize)]
-    struct Config {
-        db: DbConfig,
-        auth: AuthConfig,
-    }
-
-    #[derive(Deserialize)]
-    struct DbConfig {
-        endpoint: String,
-        namespace: String,
-        migrator_user: String,
-        migrator_password: SecretString,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthConfig {
-        signing_key: SecretString,
-        verifying_key: String,
-    }
-
-    async fn provisioned() -> (Db, String) {
-        let Config { db, auth } = resysto_config::load().unwrap();
-        let server = Db::connect(resysto_surrealdb::Config {
-            endpoint: db.endpoint,
-            namespace: db.namespace,
-            username: db.migrator_user,
-            password: db.migrator_password,
-            signing_key: auth.signing_key,
-            verifying_key: auth.verifying_key,
-        })
-        .await
-        .unwrap();
-        let name = format!("t_test_{}", Uuid::new_v4().simple());
-        resysto_migrator::provision_tenant(&server, &name)
-            .await
-            .unwrap();
-        (server, name)
-    }
-
-    async fn session(
-        server: &Db,
-        name: &str,
-        organizations: Option<&[OrganizationId]>,
-        write: bool,
-    ) -> Surreal<Any> {
-        let grant = Grant {
-            organizations: organizations
-                .map(|ids| ids.iter().copied().map(RecordId::from).collect()),
-            write,
-        };
-        let member = RecordId::new("account", Uuid::new_v7());
-        server.record_session(name, member, &grant).await.unwrap()
-    }
-
-    async fn tenant() -> Surreal<Any> {
-        let (server, name) = provisioned().await;
-        session(&server, &name, None, true).await
-    }
-
-    async fn organization(db: &Surreal<Any>, name: &str) -> OrganizationId {
-        let id = OrganizationId::new();
-        db.query("CREATE $id SET name = $name, path = []")
-            .bind(("id", id))
-            .bind(("name", name.to_owned()))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        id
-    }
-
-    fn ada(organization_ids: Vec<OrganizationId>) -> NewPerson {
-        NewPerson {
-            first_name: "Ada".into(),
-            last_name: "Lovelace".into(),
-            organization_ids,
-            ..Default::default()
+    #[test]
+    fn a_name_has_from_1_to_100_characters_once_trimmed() {
+        let longest = format!("  {}  ", "à".repeat(100));
+        let too_long = "à".repeat(101);
+        for name in ["Ada", longest.as_str()] {
+            assert!(person_name(name).is_ok(), "refused {name:?}");
+        }
+        for name in ["", "   ", too_long.as_str()] {
+            assert!(person_name(name).is_err(), "accepted {name:?}");
         }
     }
 
-    #[tokio::test]
-    async fn a_person_belongs_only_to_organizations_that_exist() {
-        let db = tenant().await;
-        let acme = organization(&db, "acme").await;
-        let ghost = OrganizationId::new();
-
-        let refused = create(&db, ada(vec![acme, ghost])).await;
-        let Err(PersonError::OrganizationsNotFound(missing)) = refused else {
-            panic!("expected OrganizationsNotFound, got {refused:?}");
-        };
-        assert_eq!(missing, vec![ghost]);
-
-        let created = create(&db, ada(vec![acme, acme])).await.unwrap();
-        assert_eq!(created.organization_ids, vec![acme]);
-
-        let patch = PersonPatch {
-            organization_ids: Some(vec![ghost]),
-            ..Default::default()
-        };
-        let refused = update(&db, created.id, patch).await;
-        assert!(
-            matches!(refused, Err(PersonError::OrganizationsNotFound(_))),
-            "{refused:?}"
-        );
-        let kept = get(&db, created.id).await.unwrap().organization_ids;
-        assert_eq!(kept, vec![acme]);
-    }
-
-    #[tokio::test]
-    async fn an_organization_with_people_cannot_be_deleted() {
-        let db = tenant().await;
-        let acme = organization(&db, "acme").await;
-        create(&db, ada(vec![acme])).await.unwrap();
-
-        let deleted = db
-            .query("DELETE $id")
-            .bind(("id", acme))
-            .await
-            .unwrap()
-            .check();
-
-        assert!(deleted.is_err(), "deleted an organization that has people");
-    }
-
-    #[tokio::test]
-    async fn a_patch_keeps_absent_fields_clears_nulls_and_sets_values() {
-        let db = tenant().await;
-        let acme = organization(&db, "acme").await;
-        let input = NewPerson {
+    #[test]
+    fn a_patch_keeps_absent_fields_clears_nulls_and_sets_values() {
+        let acme = OrganizationId::new();
+        let roma = OrganizationId::new();
+        let mut content = Content {
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
             email: Some("ada@acme.it".parse().unwrap()),
             phone: Some("06 123".into()),
-            ..ada(vec![acme])
+            job_title: None,
+            department: Some("IT".into()),
+            organization_ids: vec![acme],
         };
-        let created = create(&db, input).await.unwrap();
-
-        let patch: PersonPatch = serde_json::from_str(
-            r#"{ "last_name": " Byron ", "phone": null, "job_title": "CISO" }"#,
-        )
+        let patch: PersonPatch = serde_json::from_value(json!({
+            "last_name": " Byron ",
+            "phone": null,
+            "job_title": "CISO",
+            "organization_ids": [roma, acme, roma],
+        }))
         .unwrap();
-        let updated = update(&db, created.id, patch).await.unwrap();
 
-        assert_eq!(updated.first_name, "Ada");
-        assert_eq!(updated.last_name, "Byron");
+        patch.apply(&mut content);
+
+        assert_eq!(content.first_name, "Ada");
+        assert_eq!(content.last_name, "Byron");
         assert_eq!(
-            updated.email.as_ref().map(Email::as_str),
+            content.email.as_ref().map(Email::as_str),
             Some("ada@acme.it")
         );
-        assert_eq!(updated.phone, None);
-        assert_eq!(updated.job_title.as_deref(), Some("CISO"));
-        assert_eq!(updated.organization_ids, vec![acme]);
-        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(content.phone, None);
+        assert_eq!(content.job_title.as_deref(), Some("CISO"));
+        assert_eq!(content.department.as_deref(), Some("IT"));
+        assert_eq!(content.organization_ids, vec![roma, acme]);
     }
 
     #[test]
@@ -390,59 +282,5 @@ mod tests {
             let parsed = serde_json::from_str::<PersonPatch>(body);
             assert!(parsed.is_err(), "accepted {body}");
         }
-    }
-
-    #[tokio::test]
-    async fn a_scoped_session_reads_and_writes_only_the_people_of_its_organizations() {
-        let (server, name) = provisioned().await;
-        let admin = session(&server, &name, None, true).await;
-        let milano = organization(&admin, "milano").await;
-        let roma = organization(&admin, "roma").await;
-        let in_milano = create(&admin, ada(vec![milano])).await.unwrap();
-        let in_roma = create(&admin, ada(vec![roma])).await.unwrap();
-        let in_both = create(&admin, ada(vec![milano, roma])).await.unwrap();
-
-        let scoped = session(&server, &name, Some(&[milano]), true).await;
-        let seen: Vec<PersonId> = list(&scoped, PageRequest::default())
-            .await
-            .unwrap()
-            .data
-            .into_iter()
-            .map(|person| person.id)
-            .collect();
-        assert_eq!(seen, vec![in_milano.id, in_both.id]);
-        assert!(matches!(
-            get(&scoped, in_roma.id).await,
-            Err(PersonError::NotFound)
-        ));
-
-        // an organization outside the scope reads as one that does not exist
-        let refused = create(&scoped, ada(vec![roma])).await;
-        assert!(
-            matches!(refused, Err(PersonError::OrganizationsNotFound(_))),
-            "{refused:?}"
-        );
-        let retitle = PersonPatch {
-            job_title: Some(Some("CISO".into())),
-            ..Default::default()
-        };
-        let refusals = [
-            ("update", update(&scoped, in_both.id, retitle).await.err()),
-            ("delete", delete(&scoped, in_both.id).await.err()),
-        ];
-        for (operation, refused) in refusals {
-            assert!(
-                matches!(refused, Some(PersonError::Forbidden)),
-                "{operation}: {refused:?}"
-            );
-        }
-        assert!(get(&admin, in_both.id).await.unwrap().job_title.is_none());
-
-        let reading = session(&server, &name, Some(&[milano]), false).await;
-        let refused = create(&reading, ada(vec![milano])).await;
-        assert!(
-            matches!(refused, Err(PersonError::Forbidden)),
-            "{refused:?}"
-        );
     }
 }

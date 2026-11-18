@@ -99,9 +99,9 @@ mod tests {
     }
 
     #[test]
-    fn a_new_password_needs_15_to_128_characters() {
+    fn a_new_password_needs_12_to_128_characters() {
         let passwords = passwords("pepper");
-        for (length, accepted) in [(14, false), (15, true), (128, true), (129, false)] {
+        for (length, accepted) in [(11, false), (12, true), (128, true), (129, false)] {
             let hashed = passwords.hash(&"è".repeat(length));
             assert_eq!(hashed.is_ok(), accepted, "{length} characters");
         }

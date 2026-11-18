@@ -1,5 +1,7 @@
 //! SurrealDB access: the system connection and per-request record sessions
 
+#[cfg(feature = "mem")]
+mod mem;
 mod page;
 mod schema;
 mod transaction;
@@ -121,7 +123,11 @@ struct Claims<'a> {
 impl Db {
     /// Connects and signs in as the namespace user
     pub async fn connect(config: Config) -> Result<Self, Error> {
-        let bare = any::connect(config.endpoint).await?;
+        let bare = any::connect(config.endpoint.as_str()).await?;
+        Self::open(bare, config).await
+    }
+
+    async fn open(bare: Surreal<Any>, config: Config) -> Result<Self, Error> {
         let system = sign_in(&bare, &config.namespace, &config.username, &config.password).await?;
         Ok(Self(Arc::new(Inner {
             bare,
