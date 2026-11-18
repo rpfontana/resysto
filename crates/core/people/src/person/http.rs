@@ -1,3 +1,4 @@
+use axum::extract::FromRef;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -10,7 +11,11 @@ use super::model::{NewPerson, PersonPatch, PersonRecord};
 use super::ops::{self, PersonError};
 
 /// The routes of `/t/{slug}/api/v1/people`
-pub fn router() -> Router<Db> {
+pub fn router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+    Db: FromRef<S>,
+{
     Router::new()
         .route("/", get(list).post(create))
         .route("/{id}", get(read).patch(update).delete(delete))
