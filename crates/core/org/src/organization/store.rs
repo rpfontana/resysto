@@ -30,12 +30,15 @@ pub(super) async fn find(
     Ok(found)
 }
 
-/// One page of the organizations, in creation order
+const LIST: &str = "SELECT * FROM organization WHERE id < type::record('organization', $before)
+    ORDER BY id DESC LIMIT $limit";
+
+/// One page of the organizations, newest first
 pub(super) async fn list(
     db: &impl Executor,
     request: PageRequest,
 ) -> Result<Page<OrganizationRecord>, Error> {
-    let query = db.query("SELECT * FROM type::record('organization', $range) LIMIT $limit");
+    let query = db.query(LIST);
     page(query, request).await
 }
 
@@ -210,10 +213,10 @@ pub(super) async fn reassign(
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::Db;
+    use resysto_surrealdb::{Db, Grant};
     use surrealdb::Surreal;
     use surrealdb::engine::any::Any;
-    use surrealdb::types::RecordId;
+    use surrealdb::types::{RecordId, Uuid, Value};
 
     use super::super::model::Industry;
     use super::*;
@@ -316,5 +319,36 @@ mod tests {
         assert_eq!(tags_of(&db, &x_and_y).await, vec![y]);
         assert_eq!(tags_of(&db, &only_z).await, vec![z]);
         assert_eq!(reassign(&db, x, y).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_page_reads_the_id_index_backward_under_the_select_permission() {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, "t_acme")
+            .await
+            .unwrap();
+        let scoped = Grant {
+            organizations: Some(Vec::new()),
+            write: false,
+        };
+        let user = RecordId::new("account", Uuid::new_v7());
+        let session = db.record_session("t_acme", user, &scoped).await.unwrap();
+
+        let plan: Value = session
+            .query(format!("{LIST} EXPLAIN"))
+            .bind(("before", Uuid::new_v7()))
+            .bind(("limit", 21))
+            .await
+            .unwrap()
+            .check()
+            .unwrap()
+            .take(0)
+            .unwrap();
+
+        let plan = format!("{plan:?}");
+        assert!(
+            plan.contains("IndexScan") && plan.contains("Backward"),
+            "organization lists without reading its id index backward: {plan}"
+        );
     }
 }

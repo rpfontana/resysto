@@ -9,4 +9,5 @@ DEFINE FIELD OVERWRITE user_agent ON session TYPE option<string>;
 -- whether the login proved a second factor
 DEFINE FIELD OVERWRITE mfa ON session TYPE bool;
 
-DEFINE INDEX OVERWRITE session_account ON session FIELDS account;
+DEFINE INDEX OVERWRITE idx_session_account ON session FIELDS account;
+REMOVE INDEX IF EXISTS session_account ON session;

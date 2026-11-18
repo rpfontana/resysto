@@ -4,6 +4,7 @@ DEFINE TABLE OVERWRITE person SCHEMAFULL PERMISSIONS
     FOR create, update, delete WHERE $token.write = true AND ($token.org_all = true
         OR organization_ids.map(|$o| <string> $o) ALLINSIDE $token.org_scope);
 
+DEFINE FIELD OVERWRITE id ON person;
 DEFINE FIELD OVERWRITE first_name ON person TYPE string;
 DEFINE FIELD OVERWRITE last_name ON person TYPE string;
 DEFINE FIELD OVERWRITE email ON person TYPE option<string>;
@@ -16,3 +17,5 @@ DEFINE FIELD OVERWRITE created_at ON person TYPE datetime DEFAULT time::now() RE
 DEFINE FIELD OVERWRITE updated_at ON person TYPE datetime VALUE time::now();
 
 DEFINE FIELD OVERWRITE version ON person TYPE int VALUE ($before ?? 0) + 1;
+
+DEFINE INDEX OVERWRITE idx_person ON person FIELDS id;

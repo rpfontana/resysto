@@ -37,7 +37,7 @@ pub async fn get(db: &Surreal<Any>, id: PersonId) -> Result<PersonRecord, Person
     store::find(db, id).await?.ok_or(PersonError::NotFound)
 }
 
-/// One page of the people, in creation order
+/// One page of the people, newest first
 pub async fn list(
     db: &Surreal<Any>,
     request: PageRequest,

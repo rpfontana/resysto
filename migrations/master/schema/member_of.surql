@@ -6,4 +6,5 @@ DEFINE FIELD OVERWRITE created_at ON member_of TYPE datetime DEFAULT time::now()
 DEFINE FIELD OVERWRITE org_scope ON member_of TYPE option<array<record<organization>>>;
 DEFINE FIELD OVERWRITE roles ON member_of TYPE array<string> DEFAULT [];
 
-DEFINE INDEX OVERWRITE member_of_in_out ON member_of FIELDS in, out UNIQUE;
+DEFINE INDEX OVERWRITE idx_member_of_in_out ON member_of FIELDS in, out UNIQUE;
+REMOVE INDEX IF EXISTS member_of_in_out ON member_of;

@@ -74,15 +74,17 @@ impl<T> Page<T> {
     }
 }
 
-/// Runs a list query for one page, binding `$range` and `$limit`; the rows come from the last
-/// statement, so a `LET` can come first, and every row must carry its `id`
+/// Runs a list query for one page, newest first, binding `$before` and `$limit`; the rows come
+/// from the last statement, so a `LET` can come first, and every row must carry its `id`
 pub async fn page<T: SurrealValue>(
     query: Query<'_, Any>,
     request: PageRequest,
 ) -> Result<Page<T>, Error> {
     let limit = request.limit() as usize;
+    // no UUID v7 reaches the maximum, so the first page starts below every row
+    let before = request.after.map_or(Uuid::max(), |cursor| cursor.0);
     let mut response = query
-        .bind(("range", after(request.after.map(Cursor::key))))
+        .bind(("before", surrealdb::types::Uuid::from(before)))
         .bind(("limit", i64::from(request.limit()) + 1))
         .await?
         .check()?;
@@ -128,12 +130,6 @@ pub async fn write_in_batches<'a>(
             Some(RecordId { key, .. }) if batch.len() >= limit as usize => last = Some(key.clone()),
             _ => return Ok(written),
         }
-    }
-}
-
-impl Cursor {
-    fn key(self) -> RecordIdKey {
-        RecordIdKey::Uuid(self.0.into())
     }
 }
 
@@ -216,14 +212,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pages_return_every_matching_row_once_in_id_order() {
+    async fn pages_return_every_matching_row_once_newest_first() {
         let session = session_with_rows(100).await;
         // 40 rows pass, so the second page holds exactly `limit` rows and must be the last
         // a LET before the list, as relation filters have: the rows come from the last statement
         let list = "LET $even = (SELECT VALUE id FROM row WHERE n % 2 = 0);
-                    SELECT id, n FROM type::record('row', $range)
-                    WHERE ($min = NONE OR n >= $min) AND id IN $even
-                    LIMIT $limit";
+                    SELECT id, n FROM row
+                    WHERE id < type::record('row', $before)
+                        AND ($min = NONE OR n >= $min) AND id IN $even
+                    ORDER BY id DESC LIMIT $limit";
 
         let mut seen = Vec::new();
         let mut request = PageRequest::default();
@@ -241,7 +238,7 @@ mod tests {
         }
 
         let expected: Vec<RowView> = session
-            .query("SELECT id, n FROM row WHERE n >= 20 AND n % 2 = 0 ORDER BY id")
+            .query("SELECT id, n FROM row WHERE n >= 20 AND n % 2 = 0 ORDER BY id DESC")
             .await
             .unwrap()
             .take(0)
@@ -254,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn a_row_without_its_id_is_an_error() {
         let session = session_with_rows(1).await;
-        let list = "SELECT n FROM type::record('row', $range) LIMIT $limit";
+        let list = "SELECT n FROM row LIMIT $limit";
 
         let result = page::<Value>(session.query(list), PageRequest::default()).await;
 

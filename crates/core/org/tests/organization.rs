@@ -334,7 +334,7 @@ async fn a_scoped_member_sees_its_branches_and_changes_no_organization() {
         .iter()
         .map(|organization| serde_json::from_value(organization["id"].clone()).unwrap())
         .collect();
-    assert_eq!(seen, vec![milano, sede]);
+    assert_eq!(seen, vec![sede, milano]);
 
     let sede_uri = format!("/{sede}");
     let refusals = [

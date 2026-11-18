@@ -2,6 +2,7 @@ DEFINE TABLE OVERWRITE organization SCHEMAFULL PERMISSIONS
     FOR select WHERE $token.org_all = true OR <string> id IN $token.org_scope
     FOR create, update, delete WHERE $token.write = true AND $token.org_all = true;
 
+DEFINE FIELD OVERWRITE id ON organization;
 DEFINE FIELD OVERWRITE name ON organization TYPE string;
 DEFINE FIELD OVERWRITE parent ON organization TYPE option<record<organization>>;
 -- the ancestors from the root down to the parent
@@ -30,4 +31,7 @@ DEFINE FIELD OVERWRITE updated_at ON organization TYPE datetime VALUE time::now(
 
 DEFINE FIELD OVERWRITE version ON organization TYPE int VALUE ($before ?? 0) + 1;
 
-DEFINE INDEX OVERWRITE organization_parent ON organization FIELDS parent;
+DEFINE INDEX OVERWRITE idx_organization_parent ON organization FIELDS parent;
+REMOVE INDEX IF EXISTS organization_parent ON organization;
+
+DEFINE INDEX OVERWRITE idx_organization ON organization FIELDS id;

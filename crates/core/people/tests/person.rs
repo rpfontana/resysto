@@ -164,7 +164,7 @@ async fn a_scoped_member_reads_and_writes_only_the_people_of_its_organizations()
         .iter()
         .map(|person| format!("/{}", person["id"].as_str().unwrap()))
         .collect();
-    assert_eq!(seen, [in_milano, in_both.clone()]);
+    assert_eq!(seen, [in_both.clone(), in_milano]);
 
     let refusals = [
         (

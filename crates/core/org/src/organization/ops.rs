@@ -71,7 +71,7 @@ pub async fn get(
         .ok_or(OrganizationError::NotFound)
 }
 
-/// One page of the organizations, in creation order
+/// One page of the organizations, newest first
 pub async fn list(
     db: &Surreal<Any>,
     request: PageRequest,

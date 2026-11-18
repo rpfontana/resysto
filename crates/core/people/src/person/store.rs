@@ -13,11 +13,14 @@ pub(super) async fn find(db: &impl Executor, id: PersonId) -> Result<Option<Pers
     Ok(found)
 }
 
+const LIST: &str =
+    "SELECT * FROM person WHERE id < type::record('person', $before) ORDER BY id DESC LIMIT $limit";
+
 pub(super) async fn list(
     db: &impl Executor,
     request: PageRequest,
 ) -> Result<Page<PersonRecord>, Error> {
-    let query = db.query("SELECT * FROM type::record('person', $range) LIMIT $limit");
+    let query = db.query(LIST);
     page(query, request).await
 }
 
@@ -78,9 +81,10 @@ pub(super) async fn delete(db: &impl Executor, id: PersonId) -> Result<bool, Err
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::Db;
+    use resysto_surrealdb::{Db, Grant};
     use surrealdb::Surreal;
     use surrealdb::engine::any::Any;
+    use surrealdb::types::{RecordId, Uuid, Value};
 
     use super::*;
 
@@ -148,5 +152,36 @@ mod tests {
             .check();
 
         assert!(deleted.is_err(), "deleted an organization that has people");
+    }
+
+    #[tokio::test]
+    async fn a_page_reads_the_id_index_backward_under_the_select_permission() {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, "t_acme")
+            .await
+            .unwrap();
+        let scoped = Grant {
+            organizations: Some(Vec::new()),
+            write: false,
+        };
+        let user = RecordId::new("account", Uuid::new_v7());
+        let session = db.record_session("t_acme", user, &scoped).await.unwrap();
+
+        let plan: Value = session
+            .query(format!("{LIST} EXPLAIN"))
+            .bind(("before", Uuid::new_v7()))
+            .bind(("limit", 21))
+            .await
+            .unwrap()
+            .check()
+            .unwrap()
+            .take(0)
+            .unwrap();
+
+        let plan = format!("{plan:?}");
+        assert!(
+            plan.contains("IndexScan") && plan.contains("Backward"),
+            "person lists without reading its id index backward: {plan}"
+        );
     }
 }

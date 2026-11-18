@@ -6,7 +6,8 @@ DEFINE FIELD OVERWRITE active ON account TYPE bool DEFAULT true;
 DEFINE FIELD OVERWRITE created_at ON account TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON account TYPE datetime VALUE time::now();
 
-DEFINE INDEX OVERWRITE account_email ON account FIELDS email UNIQUE;
+DEFINE INDEX OVERWRITE idx_account_email ON account FIELDS email UNIQUE;
+REMOVE INDEX IF EXISTS account_email ON account;
 
 -- NONE while the account has no authenticator app
 DEFINE FIELD OVERWRITE totp ON account TYPE option<object>;
