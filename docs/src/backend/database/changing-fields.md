@@ -82,7 +82,7 @@ assert = "RETURN count(SELECT VALUE id FROM person WHERE string::len(email) = 0 
 schema = "person.surql"
 ```
 
-If some rows break the rule, the manifest stops before the file runs, `migrate up` fails, and the new version doesn't start. It stops again on every attempt until the rows are fixed, by hand or with a `data` step in front of the `assert`.
+If some rows break the rule, the manifest stops before the file runs, `resysto-migrator up` fails, and the new version doesn't start. It stops again on every attempt until the rows are fixed, by hand or with a `data` step in front of the `assert`.
 
 The server does count the violations once, in the background, but that count is undocumented and never refreshed, so the migrator can't rely on it.
 

@@ -64,7 +64,7 @@ DEFINE INDEX OVERWRITE idx_person ON person FIELDS id;
 
 ## When a file runs
 
-The migrator remembers the text of each file it has applied to a database. On every `migrate up` it applies again the files whose text has changed, and leaves the others alone. It records a file only after the file has run without errors, so a file that fails runs again on the next attempt.
+The migrator remembers the text of each file it has applied to a database. On every `resysto-migrator up` it applies again the files whose text has changed, and leaves the others alone. It records a file only after the file has run without errors, so a file that fails runs again on the next attempt.
 
 ## What a file can't do
 

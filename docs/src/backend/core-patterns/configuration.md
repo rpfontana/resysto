@@ -47,7 +47,7 @@ pub async fn run() -> Result<(), Error> {
 
 A crate that also connects to the database writes `resysto_surrealdb::Config` with its full path, so it doesn't clash with its own `Config`.
 
-`resysto_config::load` is the only code that reads the environment; don't call `std::env::var` anywhere else. The `resysto` binary only parses the command and calls the crate's function, it never reads configuration itself. Tests don't read the environment either: they call an inner function that takes the values as arguments.
+`resysto_config::load` is the only code that reads the environment; don't call `std::env::var` anywhere else. A `main` only parses the command and calls its crate's function, it never reads configuration itself. Tests don't read the environment either: they call an inner function that takes the values as arguments.
 
 ## Secrets
 
@@ -95,7 +95,7 @@ The values live in Komodo: plain ones as stack variables, secrets as Docker Swar
 services:
   app:
     image: registry.example.com/resysto:${IMAGE_TAG}
-    command: ["resysto", "serve"]
+    command: ["resysto-server"]
     env_file: [./.env]
     secrets: [smtp_password]
 

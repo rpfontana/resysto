@@ -1,10 +1,10 @@
 # Deploying
 
-`resysto migrate up` runs before the new version of the app starts. It brings `__master` up to date first, then the tenant databases, a few at a time. A tenant that fails doesn't stop the others. At the end the command exits with 1 if any database failed, and the deploy stops there, before the app starts.
+`resysto-migrator up` runs before the new version of the app starts. It brings `__master` up to date first, then the tenant databases, a few at a time. A tenant that fails doesn't stop the others. At the end the command exits with 1 if any database failed, and the deploy stops there, before the app starts.
 
 ## Before a deploy
 
-Run `resysto migrate plan` against production before you deploy. It shows what `migrate up` would do on each database, and changes nothing:
+Run `resysto-migrator plan` against production before you deploy. It shows what `up` would do on each database, and changes nothing:
 
 ```
 __master: up to date
@@ -31,9 +31,9 @@ To check a file, `plan` runs it in a transaction and then cancels the transactio
 - It can't see a new `ASSERT` that stored rows break, because the server accepts it. That's what the `assert` step is for.
 - A new index in a tried file is really built before the transaction is cancelled, which takes a few seconds on a large table.
 
-## Reading the output of migrate up
+## Reading the output of up
 
-`migrate up` prints what it applied to each database:
+`up` prints what it applied to each database:
 
 ```
 __master: up to date
@@ -44,4 +44,4 @@ t_initech: failed: manifest 20261201093000-person-email.toml, expand step 2 fail
 Error: migrate up failed on 1 of the databases
 ```
 
-After a failure, fix the cause and run `migrate up` again. What succeeded isn't repeated, and a failed manifest starts again from its first step.
+After a failure, fix the cause and run `up` again. What succeeded isn't repeated, and a failed manifest starts again from its first step.

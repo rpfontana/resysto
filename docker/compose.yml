@@ -1,9 +1,12 @@
-name: resysto-v2
+name: resysto-db
 
 services:
   surrealdb:
+    container_name: resysto-db
     image: surrealdb/surrealdb:v4.0.0
     command: start
+    # back up whenever the Docker engine starts, unless stopped by hand
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${SURREAL_PORT:-18000}:8000"
     environment:

@@ -7,7 +7,6 @@ members = [
     "crates/http",
     "crates/id",
     "crates/model",
-    "crates/resysto",
     "crates/server",
     "crates/core/*",
     "crates/db/*",

@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
-		"server": "cargo run -p resysto -- serve",
+		"server": "cargo run",
 		"dev:all": "pnpm run \"/^(dev|server)$/\"",
 		"build": "vite build",
 		"preview": "vite preview",

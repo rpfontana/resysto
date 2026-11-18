@@ -4185,18 +4185,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "resysto"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "resysto-migrator",
- "resysto-server",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "resysto-auth"
 version = "0.1.0"
 dependencies = [
@@ -4265,6 +4253,8 @@ dependencies = [
 name = "resysto-migrator"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "futures-util",
  "resysto-config",
  "resysto-surrealdb",
@@ -4275,6 +4265,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4342,6 +4333,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

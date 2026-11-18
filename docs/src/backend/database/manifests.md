@@ -51,7 +51,7 @@ An `assert` checks the data before a step that relies on it, for example that ev
 
 ## Expand and contract
 
-Steps go in two lists. `expand` steps add the new shape next to the old one and fill it. `contract` steps take the old shape away. The migrator runs the `expand` steps, then the `contract` steps, in the same `migrate up`.
+Steps go in two lists. `expand` steps add the new shape next to the old one and fill it. `contract` steps take the old shape away. The migrator runs the `expand` steps, then the `contract` steps, in the same run of `resysto-migrator up`.
 
 The split marks the point after which data is lost. `remove` is allowed only in `contract`, so nothing is deleted before the new data is in place.
 

@@ -1,3 +1,7 @@
+[alias]
+serve = "run -p resysto-server"
+migrate = "run -p resysto-migrator --"
+
 [env]
 RESYSTO_ADDR = "127.0.0.1:3000"
 RESYSTO_SITE = { value = "web/build", relative = true }
