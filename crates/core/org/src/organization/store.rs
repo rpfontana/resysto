@@ -12,7 +12,7 @@ use super::model::{Industry, OrganizationRecord};
 pub(super) const REASSIGN_BATCH: u32 = 500;
 
 /// The fields a write sets; the database keeps the id and the timestamps
-#[derive(SurrealValue)]
+#[derive(Default, SurrealValue)]
 pub(super) struct Content {
     pub(super) name: String,
     pub(super) parent: Option<OrganizationId>,
@@ -253,5 +253,115 @@ impl From<OrganizationRecord> for Content {
             annual_income: record.annual_income,
             employee_count: record.employee_count,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use resysto_surrealdb::Db;
+    use surrealdb::Surreal;
+    use surrealdb::engine::any::Any;
+    use surrealdb::types::RecordId;
+
+    use super::*;
+
+    // a tenant plus a table that tags its rows like every bounded context does
+    async fn tenant() -> Surreal<Any> {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, "t_acme")
+            .await
+            .unwrap();
+        let session = db.system_session("t_acme").await.unwrap();
+        session
+            .query(
+                "DEFINE TABLE item SCHEMAFULL PERMISSIONS FULL;
+                 DEFINE FIELD organization_ids ON item TYPE array<record<organization>>
+                     REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;",
+            )
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        session
+    }
+
+    async fn organization(db: &Surreal<Any>) -> OrganizationId {
+        let id = OrganizationId::new();
+        let content = Content {
+            name: "acme".into(),
+            phone: Some("06 123".into()),
+            ..Default::default()
+        };
+        insert(db, id, content).await.unwrap().unwrap();
+        id
+    }
+
+    async fn tag(db: &Surreal<Any>, organizations: &[OrganizationId]) -> RecordId {
+        db.query("CREATE ONLY item SET organization_ids = $ids RETURN VALUE id")
+            .bind(("ids", organizations.to_vec()))
+            .await
+            .unwrap()
+            .check()
+            .unwrap()
+            .take::<Option<RecordId>>(0)
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn tags_of(db: &Surreal<Any>, item: &RecordId) -> Vec<OrganizationId> {
+        let tags: Vec<Vec<OrganizationId>> = db
+            .query("SELECT VALUE organization_ids FROM $item")
+            .bind(("item", item.clone()))
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        tags.into_iter().next().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_merge_writes_the_content_and_removes_the_fields_set_to_none() {
+        let db = tenant().await;
+        let id = organization(&db).await;
+        let mut content = Content::from(find(&db, id).await.unwrap().unwrap());
+        content.phone = None;
+        // a variant of two words, in the form the schema's literal union lists
+        content.industry = Some(Industry::RealEstate);
+
+        merge(&db, id, content).await.unwrap();
+
+        let stored = find(&db, id).await.unwrap().unwrap();
+        assert_eq!(stored.phone, None);
+        assert_eq!(stored.industry, Some(Industry::RealEstate));
+    }
+
+    #[tokio::test]
+    async fn reassign_replaces_the_organization_in_every_record_once() {
+        let db = tenant().await;
+        let x = organization(&db).await;
+        let y = organization(&db).await;
+        let z = organization(&db).await;
+        let only_x = tag(&db, &[x]).await;
+        let x_and_z = tag(&db, &[x, z]).await;
+        let x_and_y = tag(&db, &[x, y]).await;
+        let only_z = tag(&db, &[z]).await;
+        // more than one batch
+        let bulk = u64::from(REASSIGN_BATCH) * 2 + 7;
+        db.query("INSERT INTO item array::map(array::range(0, $n), |$i| { organization_ids: [$x] }) RETURN NONE")
+            .bind(("n", bulk))
+            .bind(("x", x))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let moved = reassign(&db, x, y).await.unwrap();
+
+        assert_eq!(moved, bulk + 3);
+        assert_eq!(tags_of(&db, &only_x).await, vec![y]);
+        assert_eq!(tags_of(&db, &x_and_z).await, vec![y, z]);
+        assert_eq!(tags_of(&db, &x_and_y).await, vec![y]);
+        assert_eq!(tags_of(&db, &only_z).await, vec![z]);
+        assert_eq!(reassign(&db, x, y).await.unwrap(), 0);
     }
 }

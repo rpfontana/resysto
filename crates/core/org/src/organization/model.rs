@@ -449,262 +449,48 @@ where
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::{Db, Grant};
-    use secrecy::SecretString;
-    use surrealdb::types::{RecordId, Uuid};
+    use serde_json::json;
 
     use super::*;
-    use crate::organization::store::REASSIGN_BATCH;
 
-    #[derive(Deserialize)]
-    struct Config {
-        db: DbConfig,
-        auth: AuthConfig,
-    }
-
-    #[derive(Deserialize)]
-    struct DbConfig {
-        endpoint: String,
-        namespace: String,
-        migrator_user: String,
-        migrator_password: SecretString,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthConfig {
-        signing_key: SecretString,
-        verifying_key: String,
-    }
-
-    // a new tenant with the whole tenant lane, plus a table that tags its rows like every BC will
-    async fn provisioned() -> (Db, String) {
-        let Config { db, auth } = resysto_config::load().unwrap();
-        let server = Db::connect(resysto_surrealdb::Config {
-            endpoint: db.endpoint,
-            namespace: db.namespace,
-            username: db.migrator_user,
-            password: db.migrator_password,
-            signing_key: auth.signing_key,
-            verifying_key: auth.verifying_key,
-        })
-        .await
-        .unwrap();
-        let name = format!("t_test_{}", Uuid::new_v4().simple());
-        resysto_migrator::provision_tenant(&server, &name)
-            .await
-            .unwrap();
-        server
-            .system_session(&name)
-            .await
-            .unwrap()
-            .query(
-                "DEFINE TABLE item SCHEMAFULL PERMISSIONS FULL;
-                 DEFINE FIELD organization_ids ON item TYPE array<record<organization>>
-                     REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;",
-            )
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        (server, name)
-    }
-
-    async fn session(
-        server: &Db,
-        name: &str,
-        organizations: Option<&[OrganizationId]>,
-    ) -> Surreal<Any> {
-        let grant = Grant {
-            organizations: organizations
-                .map(|ids| ids.iter().copied().map(RecordId::from).collect()),
-            write: true,
-        };
-        let member = RecordId::new("account", Uuid::new_v7());
-        server.record_session(name, member, &grant).await.unwrap()
-    }
-
-    async fn tenant() -> Surreal<Any> {
-        let (server, name) = provisioned().await;
-        session(&server, &name, None).await
-    }
-
-    async fn add(
-        db: &Surreal<Any>,
-        name: &str,
-        parent: Option<&OrganizationRecord>,
-    ) -> OrganizationRecord {
-        let input = NewOrganization {
-            name: name.into(),
-            parent: parent.map(|parent| parent.id),
-            ..Default::default()
-        };
-        create(db, input).await.unwrap()
-    }
-
-    async fn path_of(db: &Surreal<Any>, org: &OrganizationRecord) -> Vec<OrganizationId> {
-        get(db, org.id).await.unwrap().path
-    }
-
-    fn move_to(parent: Option<&OrganizationRecord>) -> OrganizationPatch {
-        OrganizationPatch {
-            parent: Some(parent.map(|parent| parent.id)),
-            ..Default::default()
+    #[test]
+    fn a_name_has_from_2_to_200_characters_once_trimmed() {
+        let longest = format!("  {}  ", "à".repeat(200));
+        let too_long = "à".repeat(201);
+        for name in ["Ab", longest.as_str()] {
+            assert!(organization_name(name).is_ok(), "refused {name:?}");
+        }
+        for name in ["", " A ", too_long.as_str()] {
+            assert!(organization_name(name).is_err(), "accepted {name:?}");
         }
     }
 
-    async fn tag(db: &Surreal<Any>, orgs: &[&OrganizationRecord]) -> RecordId {
-        let ids: Vec<OrganizationId> = orgs.iter().map(|org| org.id).collect();
-        db.query("CREATE ONLY item SET organization_ids = $ids RETURN VALUE id")
-            .bind(("ids", ids))
-            .await
-            .unwrap()
-            .check()
-            .unwrap()
-            .take::<Option<RecordId>>(0)
-            .unwrap()
-            .unwrap()
-    }
-
-    async fn tags_of(db: &Surreal<Any>, item: &RecordId) -> Vec<OrganizationId> {
-        let tags: Vec<Vec<OrganizationId>> = db
-            .query("SELECT VALUE organization_ids FROM $item")
-            .bind(("item", item.clone()))
-            .await
-            .unwrap()
-            .take(0)
-            .unwrap();
-        tags.into_iter().next().unwrap()
-    }
-
-    #[tokio::test]
-    async fn a_parent_must_exist_and_the_tree_stops_five_levels_down() {
-        let db = tenant().await;
-        let orphan = NewOrganization {
-            name: "orphan".into(),
-            parent: Some(OrganizationId::new()),
-            ..Default::default()
-        };
-        let refused = create(&db, orphan).await;
-        assert!(
-            matches!(refused, Err(OrganizationError::ParentNotFound)),
-            "{refused:?}"
-        );
-
-        let mut parent = add(&db, "level 0", None).await;
-        for level in 1..=MAX_DEPTH {
-            parent = add(&db, &format!("level {level}"), Some(&parent)).await;
-            assert_eq!(parent.path.len(), level);
-        }
-        let too_deep = NewOrganization {
-            name: "too deep".into(),
-            parent: Some(parent.id),
-            ..Default::default()
-        };
-        let refused = create(&db, too_deep).await;
-        assert!(
-            matches!(refused, Err(OrganizationError::TooDeep)),
-            "{refused:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn moving_a_branch_rewrites_the_paths_below_it() {
-        let db = tenant().await;
-        let r1 = add(&db, "r1", None).await;
-        let a = add(&db, "a", Some(&r1)).await;
-        let b = add(&db, "b", Some(&a)).await;
-        let c = add(&db, "c", Some(&b)).await;
-        let r2 = add(&db, "r2", None).await;
-
-        let moved = update(&db, a.id, move_to(Some(&r2))).await.unwrap();
-        assert_eq!((moved.parent, moved.path), (Some(r2.id), vec![r2.id]));
-        assert_eq!(path_of(&db, &b).await, vec![r2.id, a.id]);
-        assert_eq!(path_of(&db, &c).await, vec![r2.id, a.id, b.id]);
-
-        let moved = update(&db, a.id, move_to(None)).await.unwrap();
-        assert_eq!((moved.parent, moved.path), (None, vec![]));
-        assert_eq!(path_of(&db, &b).await, vec![a.id]);
-        assert_eq!(path_of(&db, &c).await, vec![a.id, b.id]);
-    }
-
-    #[tokio::test]
-    async fn a_move_that_would_break_the_tree_changes_nothing() {
-        let db = tenant().await;
-        let root = add(&db, "root", None).await;
-        let a = add(&db, "a", Some(&root)).await;
-        let b = add(&db, "b", Some(&a)).await;
-        let mut deep = add(&db, "x0", None).await;
-        for level in 1..MAX_DEPTH {
-            deep = add(&db, &format!("x{level}"), Some(&deep)).await;
-        }
-        let ghost = OrganizationPatch {
-            parent: Some(Some(OrganizationId::new())),
-            ..Default::default()
-        };
-
-        let refusals = [
-            (move_to(Some(&a)), "own parent"),
-            (move_to(Some(&b)), "under its child"),
-            (move_to(Some(&deep)), "b would sit six levels down"),
-            (ghost, "missing parent"),
-        ];
-        for (patch, case) in refusals {
-            let refused = update(&db, a.id, patch).await;
-            assert!(
-                matches!(
-                    refused,
-                    Err(OrganizationError::OwnParent
-                        | OrganizationError::Cycle
-                        | OrganizationError::TooDeep
-                        | OrganizationError::ParentNotFound)
-                ),
-                "{case}: {refused:?}"
-            );
-        }
-        assert_eq!(path_of(&db, &b).await, vec![root.id, a.id]);
-
-        // one level up the same branch fits exactly
-        let parent_of_deep = deep.parent.unwrap();
-        let moved = update(
-            &db,
-            a.id,
-            OrganizationPatch {
-                parent: Some(Some(parent_of_deep)),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(moved.path.len() + 1, MAX_DEPTH);
-        assert_eq!(path_of(&db, &b).await.len(), MAX_DEPTH);
-    }
-
-    #[tokio::test]
-    async fn a_patch_keeps_absent_fields_clears_nulls_and_sets_values() {
-        let db = tenant().await;
-        let input = NewOrganization {
+    #[test]
+    fn a_patch_keeps_absent_fields_clears_nulls_and_sets_values() {
+        let mut content = Content {
             name: "acme".into(),
             email: Some("info@acme.it".parse().unwrap()),
             phone: Some("06 123".into()),
-            // the name the schema's literal union expects
-            industry: Some(Industry::RealEstate),
             ..Default::default()
         };
-        let created = create(&db, input).await.unwrap();
+        let patch: OrganizationPatch = serde_json::from_value(json!({
+            "name": " Acme Spa ",
+            "phone": null,
+            "city": "Roma",
+            "industry": "real_estate",
+        }))
+        .unwrap();
 
-        let patch: OrganizationPatch =
-            serde_json::from_str(r#"{ "phone": null, "city": "Roma" }"#).unwrap();
-        let updated = update(&db, created.id, patch).await.unwrap();
+        patch.apply(&mut content);
 
-        assert_eq!(updated.name, "acme");
+        assert_eq!(content.name, "Acme Spa");
         assert_eq!(
-            updated.email.as_ref().map(Email::as_str),
+            content.email.as_ref().map(Email::as_str),
             Some("info@acme.it")
         );
-        assert_eq!(updated.phone, None);
-        assert_eq!(updated.city.as_deref(), Some("Roma"));
-        assert_eq!(updated.industry, Some(Industry::RealEstate));
-        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(content.phone, None);
+        assert_eq!(content.city.as_deref(), Some("Roma"));
+        assert_eq!(content.industry, Some(Industry::RealEstate));
     }
 
     #[test]
@@ -713,147 +499,5 @@ mod tests {
             let parsed = serde_json::from_str::<OrganizationPatch>(body);
             assert!(parsed.is_err(), "accepted {body}");
         }
-    }
-
-    #[tokio::test]
-    async fn updating_a_missing_organization_creates_nothing() {
-        let db = tenant().await;
-        let id = OrganizationId::new();
-        let patch = OrganizationPatch {
-            name: Some("ghost".into()),
-            ..Default::default()
-        };
-
-        let refused = update(&db, id, patch).await;
-
-        assert!(
-            matches!(refused, Err(OrganizationError::NotFound)),
-            "{refused:?}"
-        );
-        assert!(matches!(
-            get(&db, id).await,
-            Err(OrganizationError::NotFound)
-        ));
-    }
-
-    #[tokio::test]
-    async fn only_an_organization_without_children_or_records_is_deleted() {
-        let db = tenant().await;
-        let parent = add(&db, "parent", None).await;
-        let child = add(&db, "child", Some(&parent)).await;
-        let other = add(&db, "other", None).await;
-        tag(&db, &[&child]).await;
-        tag(&db, &[&child, &other]).await;
-
-        let refused = delete(&db, parent.id).await;
-        assert!(
-            matches!(refused, Err(OrganizationError::HasChildren)),
-            "{refused:?}"
-        );
-
-        let refused = delete(&db, child.id).await;
-        let Err(OrganizationError::InUse(found)) = refused else {
-            panic!("expected InUse, got {refused:?}");
-        };
-        assert_eq!(found, BTreeMap::from([("item".to_owned(), 2)]));
-
-        reassign(&db, child.id, other.id).await.unwrap();
-        delete(&db, child.id).await.unwrap();
-        delete(&db, parent.id).await.unwrap();
-        assert!(matches!(
-            delete(&db, parent.id).await,
-            Err(OrganizationError::NotFound)
-        ));
-    }
-
-    #[tokio::test]
-    async fn reassign_replaces_the_organization_in_every_record_once() {
-        let db = tenant().await;
-        let x = add(&db, "x", None).await;
-        let y = add(&db, "y", None).await;
-        let z = add(&db, "z", None).await;
-        let only_x = tag(&db, &[&x]).await;
-        let x_and_z = tag(&db, &[&x, &z]).await;
-        let x_and_y = tag(&db, &[&x, &y]).await;
-        let only_z = tag(&db, &[&z]).await;
-        // more than one batch
-        let bulk = usize::try_from(REASSIGN_BATCH).unwrap() * 2 + 7;
-        db.query("INSERT INTO item array::map(array::range(0, $n), |$i| { organization_ids: [$x] }) RETURN NONE")
-            .bind(("n", i64::try_from(bulk).unwrap()))
-            .bind(("x", x.id))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let moved = reassign(&db, x.id, y.id).await.unwrap();
-
-        assert_eq!(moved, u64::try_from(bulk + 3).unwrap());
-        assert_eq!(tags_of(&db, &only_x).await, vec![y.id]);
-        assert_eq!(tags_of(&db, &x_and_z).await, vec![y.id, z.id]);
-        assert_eq!(tags_of(&db, &x_and_y).await, vec![y.id]);
-        assert_eq!(tags_of(&db, &only_z).await, vec![z.id]);
-        assert_eq!(reassign(&db, x.id, y.id).await.unwrap(), 0);
-
-        let same = reassign(&db, x.id, x.id).await;
-        assert!(
-            matches!(same, Err(OrganizationError::SameTarget)),
-            "{same:?}"
-        );
-        let ghost = reassign(&db, x.id, OrganizationId::new()).await;
-        assert!(
-            matches!(ghost, Err(OrganizationError::TargetNotFound)),
-            "{ghost:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_scoped_session_sees_its_branches_and_changes_no_organization() {
-        let (server, name) = provisioned().await;
-        let admin = session(&server, &name, None).await;
-        let root = add(&admin, "root", None).await;
-        let milano = add(&admin, "milano", Some(&root)).await;
-        let sede = add(&admin, "sede", Some(&milano)).await;
-        let roma = add(&admin, "roma", Some(&root)).await;
-        let ghost = OrganizationId::new();
-
-        let reached = with_branches(&admin, vec![milano.id, ghost]).await.unwrap();
-        assert_eq!(reached, vec![milano.id, ghost, sede.id]);
-
-        let scoped = session(&server, &name, Some(&reached)).await;
-        let seen: Vec<OrganizationId> = list(&scoped, PageRequest::default())
-            .await
-            .unwrap()
-            .data
-            .into_iter()
-            .map(|organization| organization.id)
-            .collect();
-        assert_eq!(seen, vec![milano.id, sede.id]);
-        assert!(matches!(
-            get(&scoped, roma.id).await,
-            Err(OrganizationError::NotFound)
-        ));
-
-        let child = NewOrganization {
-            name: "ufficio".into(),
-            parent: Some(sede.id),
-            ..Default::default()
-        };
-        let rename = OrganizationPatch {
-            name: Some("sede nuova".into()),
-            ..Default::default()
-        };
-        let refusals = [
-            ("create", create(&scoped, child).await.err()),
-            ("update", update(&scoped, sede.id, rename).await.err()),
-            ("delete", delete(&scoped, sede.id).await.err()),
-        ];
-        for (operation, refused) in refusals {
-            assert!(
-                matches!(refused, Some(OrganizationError::Forbidden)),
-                "{operation}: {refused:?}"
-            );
-        }
-        assert_eq!(get(&admin, sede.id).await.unwrap().name, "sede");
     }
 }

@@ -4292,17 +4292,16 @@ name = "resysto-org"
 version = "0.1.0"
 dependencies = [
  "axum",
- "resysto-config",
  "resysto-http",
  "resysto-migrator",
  "resysto-model",
  "resysto-surrealdb",
- "secrecy",
  "serde",
  "serde_json",
  "surrealdb",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "validator",
 ]
 
