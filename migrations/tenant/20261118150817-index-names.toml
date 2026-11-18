@@ -1,0 +1,7 @@
+title = "organization_parent renamed to idx_organization_parent"
+
+[[expand]]
+schema = "org/organization.surql"
+
+[[contract]]
+remove = { table = "organization", index = "organization_parent" }

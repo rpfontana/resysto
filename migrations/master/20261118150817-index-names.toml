@@ -1,0 +1,28 @@
+title = "indexes renamed to idx_<table>_<fields>"
+
+[[expand]]
+schema = "account.surql"
+
+[[expand]]
+schema = "member_of.surql"
+
+[[expand]]
+schema = "session.surql"
+
+[[expand]]
+schema = "tenant.surql"
+
+[[contract]]
+remove = { table = "account", index = "account_email" }
+
+[[contract]]
+remove = { table = "member_of", index = "member_of_in_out" }
+
+[[contract]]
+remove = { table = "session", index = "session_account" }
+
+[[contract]]
+remove = { table = "tenant", index = "tenant_db_name" }
+
+[[contract]]
+remove = { table = "tenant", index = "tenant_slug" }

@@ -99,7 +99,7 @@ GET /api/v1/users?limit=20&after=0193a2f4-...
 -> { "data": [ ...7 users... ], "next_cursor": null }
 ```
 
-The cursor is the id of the last row on the page. Ids are time-ordered UUID v7, so rows come in creation order and the next page starts right after the cursor: the database jumps to it instead of reading and skipping the rows before. Clients treat the cursor as opaque: they pass it back unchanged and never build one.
+The cursor is the id of the last row on the page. Ids are time-ordered UUID v7, so a list starts from the newest rows and the next page holds the rows older than the cursor: the database jumps to the cursor through the table's index on `id`, instead of reading and skipping the rows before. Clients treat the cursor as opaque: they pass it back unchanged and never build one.
 
 List queries don't handle cursors by hand: the database crate has a helper that applies `after` and `limit` and returns `data` with `next_cursor`.
 

@@ -43,7 +43,7 @@ The server refuses to migrate a field that an index reads. Remove the index firs
 
 ```toml
 [[contract]]
-remove = { table = "person", index = "person_email" }
+remove = { table = "person", index = "idx_person_email" }
 
 [[contract]]
 migrate = "DEFINE FIELD OVERWRITE email ON person TYPE string MIGRATE EXISTING ROWS AS email_required USING $value ?? '' FALLBACK ''"
