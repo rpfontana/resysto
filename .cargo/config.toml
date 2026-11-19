@@ -4,7 +4,7 @@ migrate = "run -p resysto-migrator --"
 
 [env]
 RESYSTO_ADDR = "127.0.0.1:3000"
-RESYSTO_SITE = { value = "web/build", relative = true }
+RESYSTO_SITE = { value = "app/build", relative = true }
 
 RESYSTO_DB__ENDPOINT = "ws://127.0.0.1:18000"
 RESYSTO_DB__NAMESPACE = "resysto-dev"

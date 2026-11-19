@@ -1,5 +1,5 @@
 {
-	"name": "resysto-web",
+	"name": "resysto-app",
 	"private": true,
 	"type": "module",
 	"imports": {
