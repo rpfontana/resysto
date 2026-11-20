@@ -16,8 +16,8 @@ const AUDIT_KEPT: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 /// The audit tables of a tenant's database
 const TENANT_AUDIT: [&str; 2] = ["audit_change", "audit_event"];
 
-/// Deletes ended sessions, expired challenges, forgotten failures and audit rows older than a
-/// year every hour, for as long as the server runs
+/// Deletes ended sessions, expired challenges, grants and tokens, forgotten failures and audit rows
+/// older than a year every hour, for as long as the server runs
 pub async fn sweep_forever(db: Db, master: String) {
     let mut every = time::interval(EVERY);
     loop {
@@ -108,6 +108,26 @@ async fn sweep(master: &Surreal<Any>) -> Result<u64, Error> {
             .bind(("max", MAX_FAILURES))
     })
     .await?;
+    let mut tokens = 0;
+    // an expired grant takes its tokens with it
+    for table in [
+        "oauth_grant",
+        "access_token",
+        "refresh_token",
+        "oauth_request",
+    ] {
+        tokens += write_in_batches(BATCH, || {
+            master
+                .query(
+                    "LET $batch = (SELECT VALUE id FROM type::table($table)
+                         WHERE expires_at < time::now() LIMIT $limit);
+                     DELETE $batch;
+                     RETURN $batch;",
+                )
+                .bind(("table", table))
+        })
+        .await?;
+    }
     let challenges = write_in_batches(BATCH, || {
         master.query(
             "LET $batch = (SELECT VALUE id FROM login_challenge
@@ -117,7 +137,7 @@ async fn sweep(master: &Surreal<Any>) -> Result<u64, Error> {
         )
     })
     .await?;
-    Ok(sessions + failures + challenges)
+    Ok(sessions + failures + tokens + challenges)
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ pub enum PolicyError {
 }
 
 /// A member of a tenant, as the policies see it
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Member {
     pub(crate) account: AccountId,
     pub(crate) roles: Vec<String>,
@@ -42,9 +42,8 @@ pub(crate) struct Member {
     pub(crate) tenant: String,
 }
 
-/// What a request does to its resource, from its HTTP method
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Verb {
+pub enum Verb {
     Read,
     Write,
     Delete,
@@ -116,6 +115,20 @@ impl Policies {
         )?;
         let response = Authorizer::new().is_authorized(&request, &self.set, &entities);
         Ok(response.decision())
+    }
+}
+
+/// A member's roles in a tenant, for a decision taken after the middleware, as a tool call needs
+#[derive(Debug, Clone)]
+pub struct TenantRoles(pub(crate) Member);
+
+impl TenantRoles {
+    pub fn allows(&self, policies: &Policies, verb: Verb, resource: &str) -> bool {
+        policies.allows(&self.0, verb, resource)
+    }
+
+    pub fn names(&self) -> &[String] {
+        &self.0.roles
     }
 }
 

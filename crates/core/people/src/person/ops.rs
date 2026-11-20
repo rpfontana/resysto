@@ -45,6 +45,19 @@ pub async fn list(
     Ok(store::list(db, request).await?)
 }
 
+pub(super) async fn search(
+    db: &Surreal<Any>,
+    text: Option<&str>,
+    organization: Option<OrganizationId>,
+    request: PageRequest,
+) -> Result<Page<PersonRecord>, PersonError> {
+    let text = text
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_lowercase);
+    Ok(store::search(db, text, organization, request).await?)
+}
+
 /// Applies `patch` to the person, if it is still at `version`
 pub async fn update(
     db: &Surreal<Any>,

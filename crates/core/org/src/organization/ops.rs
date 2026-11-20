@@ -72,6 +72,18 @@ pub async fn get(
 }
 
 /// One page of the organizations, newest first
+pub(super) async fn search(
+    db: &Surreal<Any>,
+    text: Option<&str>,
+    request: PageRequest,
+) -> Result<Page<OrganizationRecord>, OrganizationError> {
+    let text = text
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_lowercase);
+    Ok(store::search(db, text, request).await?)
+}
+
 pub async fn list(
     db: &Surreal<Any>,
     request: PageRequest,

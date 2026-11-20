@@ -53,6 +53,7 @@ DEFINE EVENT OVERWRITE audit ON organization THEN {
         after: $after,
         before: $before,
         by: $auth,
+        client: $token.client,
         event: $event,
         ip: $token.ip,
         record: $value.id,

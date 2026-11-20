@@ -22,6 +22,11 @@ use crate::policy::Verb;
 pub(crate) enum Event {
     AccountCreated,
     MemberAdded,
+    AccessTokenIssued,
+    AppAllowed,
+    AppRefused,
+    RefreshTokenReused,
+    GrantRevoked,
     Login,
     LoginFailed,
     SecondFactorRefused,
@@ -53,6 +58,8 @@ pub(crate) struct About {
     /// The key of the session the event happened in, or ended
     pub(crate) session: Option<String>,
     pub(crate) tenant: Option<RecordId>,
+    pub(crate) app: Option<String>,
+    pub(crate) tenants: Option<Vec<RecordId>>,
     pub(crate) client: Client,
 }
 
@@ -104,6 +111,7 @@ struct Change {
     by: Option<MemberId>,
     by_email: Option<String>,
     via: Option<String>,
+    client: Option<String>,
     session: Option<String>,
     request: Option<String>,
     ip: Option<String>,
@@ -121,6 +129,7 @@ struct TenantEvent {
     by: Option<MemberId>,
     by_email: Option<String>,
     via: Option<String>,
+    client: Option<String>,
     session: Option<String>,
     request: Option<String>,
     ip: Option<String>,
@@ -139,18 +148,18 @@ struct ChangesQuery {
 
 const CHANGES: &str =
     "SELECT id, at, event, record::tb(record) AS table, record::id(record) AS record,
-         by, by.email AS by_email, via, session, request, ip, user_agent, before, after
+         by, by.email AS by_email, via, client, session, request, ip, user_agent, before, after
      FROM audit_change WHERE id < type::record('audit_change', $before)
      ORDER BY id DESC LIMIT $limit";
 
 const RECORD_CHANGES: &str = "SELECT id, at, event, record::tb(record) AS table,
-         record::id(record) AS record, by, by.email AS by_email, via, session, request, ip,
+         record::id(record) AS record, by, by.email AS by_email, via, client, session, request, ip,
          user_agent, before, after
      FROM audit_change WHERE record = $record AND id < type::record('audit_change', $before)
      ORDER BY id DESC LIMIT $limit";
 
 const EVENTS: &str =
-    "SELECT id, at, event, by, by.email AS by_email, via, session, request, ip, user_agent,
+    "SELECT id, at, event, by, by.email AS by_email, via, client, session, request, ip, user_agent,
          action, resource
      FROM audit_event WHERE id < type::record('audit_event', $before)
      ORDER BY id DESC LIMIT $limit";
@@ -175,13 +184,15 @@ pub(crate) async fn record(
         .query(
             "CREATE type::record('audit_event', rand::uuid::v7())
              SET event = $kind, account = $account, session = $session_key, tenant = $tenant,
-                 ip = $ip, user_agent = $user_agent
+                 client = $app, tenants = $tenants, ip = $ip, user_agent = $user_agent
              RETURN NONE",
         )
         .bind(("kind", event))
         .bind(("account", about.account))
         .bind(("session_key", about.session))
         .bind(("tenant", about.tenant))
+        .bind(("app", about.app))
+        .bind(("tenants", about.tenants))
         .bind(("ip", about.client.ip.map(|ip| ip.to_string())))
         .bind(("user_agent", about.client.user_agent))
         .await?
@@ -190,7 +201,7 @@ pub(crate) async fn record(
 }
 
 /// Records in the tenant's database that the policies refused `actor` a request
-pub(crate) async fn record_refusal(
+pub async fn record_refusal(
     db: &Db,
     database: &str,
     actor: &Actor,
@@ -201,12 +212,14 @@ pub(crate) async fn record_refusal(
         .await?
         .query(
             "CREATE type::record('audit_event', rand::uuid::v7())
-             SET event = 'refused', by = $by, via = $via, session = $session_key, request = $request,
+             SET event = 'refused', by = $by, via = $via, client = $client, session = $session_key,
+                 request = $request,
                  ip = $ip, user_agent = $user_agent, action = $action, resource = $resource
              RETURN NONE",
         )
         .bind(("by", actor.member.clone()))
         .bind(("via", actor.via))
+        .bind(("client", actor.client.clone()))
         .bind(("session_key", actor.session.clone()))
         .bind(("request", actor.request.clone()))
         .bind(("ip", actor.ip.map(|ip| ip.to_string())))
@@ -347,6 +360,7 @@ mod tests {
             actor: Actor {
                 member: MemberId::new().into(),
                 via: Via::Ui,
+                client: None,
                 session: None,
                 request: None,
                 ip: None,
@@ -380,6 +394,7 @@ mod tests {
         let writer = Actor {
             member: member.into(),
             via: Via::Ui,
+            client: None,
             session: Some("5e55".into()),
             request: Some("r-1".into()),
             ip: Some(IpAddr::from([10, 0, 0, 7])),

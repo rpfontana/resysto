@@ -6,12 +6,14 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb::types::Uuid;
+use surrealdb::types::{RecordId, Uuid};
 use totp_rs::{Builder, Secret};
 
+use super::account::AccountId;
 use super::audit::Client;
 use super::login::{Login, login};
 use super::mfa::{confirm_totp, set_up_totp};
+use super::oauth::{create_grant, issue_access_token};
 use super::session::authenticate;
 use crate::password::Passwords;
 use crate::totp::Cipher;
@@ -169,4 +171,25 @@ pub(super) async fn run(master: &Surreal<Any>, query: &str, key: &str) {
         .unwrap()
         .check()
         .unwrap();
+}
+
+// a token of a grant consented without a second factor
+pub(super) async fn access_token(
+    master: &Surreal<Any>,
+    account: AccountId,
+    slugs: &[&str],
+    client: &str,
+) -> String {
+    let slugs: Vec<String> = slugs.iter().map(|&slug| slug.to_owned()).collect();
+    let tenants: Vec<RecordId> = master
+        .query("SELECT VALUE id FROM tenant WHERE slug IN $slugs")
+        .bind(("slugs", slugs))
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    let grant = create_grant(master, account, tenants, client, "Claude", false, None)
+        .await
+        .unwrap();
+    issue_access_token(master, grant).await.unwrap()
 }

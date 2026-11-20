@@ -19,6 +19,12 @@ pub(crate) async fn widen_to_branches(
             "require_member did not run before widen_to_branches"
         )));
     };
+    let access = widen(&db, member).await?;
+    request.extensions_mut().insert(access);
+    Ok(next.run(request).await)
+}
+
+pub(crate) async fn widen(db: &Db, member: TenantMember) -> AppResult<TenantAccess> {
     let organizations = match member.organizations {
         None => None,
         Some(assigned) => {
@@ -31,13 +37,12 @@ pub(crate) async fn widen_to_branches(
             Some(reached.into_iter().map(RecordId::from).collect())
         }
     };
-    request.extensions_mut().insert(TenantAccess {
+    Ok(TenantAccess {
         database: member.database,
         actor: member.actor,
         grant: Grant {
             organizations,
             write: member.write,
         },
-    });
-    Ok(next.run(request).await)
+    })
 }

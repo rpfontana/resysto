@@ -6,7 +6,7 @@ mod page;
 mod schema;
 mod transaction;
 
-pub use page::{Cursor, Page, PageRequest, page, write_in_batches};
+pub use page::{Cursor, InvalidCursor, Page, PageRequest, page, write_in_batches};
 pub use schema::{SchemaFile, apply_schema, changed_schema, dry_run_schema};
 pub use transaction::{Executor, Tx, transaction};
 
@@ -84,7 +84,9 @@ pub struct Actor {
     /// The member the session runs as, which `$auth` holds
     pub member: RecordId,
     pub via: Via,
-    /// The key of the browser session the request came with
+    /// The `client_id` of the agent's app, for writes through MCP
+    pub client: Option<String>,
+    /// The key of the browser session or of the access token the request came with
     pub session: Option<String>,
     /// The request's `x-request-id`, shared by every change it makes
     pub request: Option<String>,
@@ -101,6 +103,8 @@ pub struct Actor {
 pub enum Via {
     /// The SPA, with a browser session
     Ui,
+    /// An agent through MCP, with an access token
+    Mcp,
 }
 
 /// Errors returned by [`Db`]
@@ -145,6 +149,8 @@ struct Claims<'a> {
     org_scope: Vec<String>,
     write: bool,
     via: Via,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sid: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,6 +272,7 @@ impl Db {
                 .collect(),
             write: grant.write,
             via: actor.via,
+            client: actor.client.as_deref(),
             sid: actor.session.as_deref(),
             rid: actor.request.as_deref(),
             ip: actor.ip,
@@ -392,6 +399,7 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         Actor {
             member,
             via: Via::Ui,
+            client: None,
             session: None,
             request: None,
             ip: None,

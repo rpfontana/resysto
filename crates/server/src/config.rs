@@ -6,6 +6,8 @@ use serde::Deserialize;
 pub(crate) struct Config {
     pub(crate) addr: String,
     pub(crate) site: String,
+    /// The URL clients reach the server at, which OAuth and MCP clients must see exactly
+    pub(crate) public_url: String,
     /// Where the address of a request comes from: `ConnectInfo` without a proxy in front,
     /// the header the proxy sets behind one, such as `RightmostXForwardedFor`
     pub(crate) client_ip_source: ClientIpSource,

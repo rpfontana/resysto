@@ -42,6 +42,68 @@ pub(super) async fn list(
     page(query, request).await
 }
 
+const SEARCH: &str = "SELECT * FROM organization
+    WHERE id < type::record('organization', $before)
+        AND ($text = NONE OR string::lowercase(name) CONTAINS $text)
+    ORDER BY id DESC LIMIT $limit";
+
+/// `text` must be lowercase
+pub(super) async fn search(
+    db: &impl Executor,
+    text: Option<String>,
+    request: PageRequest,
+) -> Result<Page<OrganizationRecord>, Error> {
+    let query = db.query(SEARCH).bind(("text", text));
+    page(query, request).await
+}
+
+#[derive(Debug, SurrealValue)]
+pub(super) struct Named {
+    pub(super) id: OrganizationId,
+    pub(super) name: String,
+}
+
+pub(super) async fn names(
+    db: &impl Executor,
+    ids: Vec<OrganizationId>,
+) -> Result<Vec<Named>, Error> {
+    let names: Vec<Named> = db
+        .query("SELECT id, name FROM $ids")
+        .bind(("ids", ids))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(names)
+}
+
+pub(super) async fn named(
+    db: &impl Executor,
+    name: &str,
+) -> Result<Vec<OrganizationRecord>, Error> {
+    let named: Vec<OrganizationRecord> = db
+        .query("SELECT * FROM organization WHERE string::lowercase(name) = $name LIMIT 5")
+        .bind(("name", name.trim().to_lowercase()))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(named)
+}
+
+pub(super) async fn branches(
+    db: &impl Executor,
+    id: OrganizationId,
+    limit: i64,
+) -> Result<Vec<Named>, Error> {
+    let branches: Vec<Named> = db
+        .query("SELECT id, name FROM organization WHERE parent = $id ORDER BY name LIMIT $limit")
+        .bind(("id", id))
+        .bind(("limit", limit))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(branches)
+}
+
 /// The ancestors of an organization, or `None` when it does not exist
 pub(super) async fn path(
     db: &impl Executor,
@@ -226,6 +288,7 @@ mod tests {
         Actor {
             member,
             via: Via::Ui,
+            client: None,
             session: None,
             request: None,
             ip: None,

@@ -46,7 +46,7 @@ impl Membership {
     }
 }
 
-fn needs_mfa(required_for: MfaRequiredFor, roles: &[String]) -> bool {
+pub(crate) fn needs_mfa(required_for: MfaRequiredFor, roles: &[String]) -> bool {
     required_for == MfaRequiredFor::Everyone || roles.iter().any(|role| role == ADMIN)
 }
 

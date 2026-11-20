@@ -20,11 +20,13 @@ use surrealdb::engine::any::Any;
 use validator::Validate;
 
 use super::account::{self, AccountRecord, Profile};
+use super::agent::PublicUrl;
 use super::audit::{self, Client};
 use super::error::AuthError;
 use super::login::{self, Login};
 use super::membership::{self, MemberOf};
 use super::mfa;
+use super::oauth;
 use super::password::{PasswordError, Passwords};
 use super::policy::{Member, Policies, Verb};
 use super::session::{self, Session, SessionRecord};
@@ -35,7 +37,7 @@ const SESSION_COOKIE: &str = "__Host-session";
 /// Holds a login whose password was right while it waits for its second factor
 const LOGIN_COOKIE: &str = "__Host-login";
 /// The header the server's request id layer sets on every request
-const REQUEST_ID: &str = "x-request-id";
+pub(crate) const REQUEST_ID: &str = "x-request-id";
 /// Enough to tell browsers and devices apart in the list of sessions and in the audit
 const USER_AGENT_MAX: usize = 200;
 
@@ -59,7 +61,7 @@ pub struct TenantMember {
 /// The `{slug}` of a tenant's routes
 #[derive(Debug, Deserialize)]
 pub struct TenantPath {
-    slug: String,
+    pub(crate) slug: String,
 }
 
 /// The routes of `/api/v1/auth`
@@ -70,6 +72,7 @@ where
     MasterName: FromRef<S>,
     Passwords: FromRef<S>,
     Cipher: FromRef<S>,
+    PublicUrl: FromRef<S>,
 {
     Router::new()
         .route("/login", post(login))
@@ -83,6 +86,9 @@ where
         .route("/totp/setup", post(set_up_totp))
         .route("/totp/confirm", post(confirm_totp))
         .route("/totp/disable", post(disable_totp))
+        .route("/oauth/requests/{id}", get(oauth::consent_request))
+        .route("/oauth/requests/{id}/approve", post(oauth::approve))
+        .route("/oauth/requests/{id}/deny", post(oauth::deny))
 }
 
 /// Lets a request through to a tenant's routes only with a live session of one of its members,
@@ -116,6 +122,7 @@ pub async fn require_member(
     let actor = Actor {
         member: account.cast::<resysto_model::Member>().into(),
         via: Via::Ui,
+        client: None,
         session: Some(key(token(&jar)?)),
         request: request
             .headers()
@@ -475,13 +482,13 @@ fn challenge(jar: &CookieJar) -> AppResult<&str> {
         .ok_or(AppError::Unauthorized)
 }
 
-async fn signed_in(master: &Surreal<Any>, jar: &CookieJar) -> AppResult<Session> {
+pub(crate) async fn signed_in(master: &Surreal<Any>, jar: &CookieJar) -> AppResult<Session> {
     session::authenticate(master, token(jar)?)
         .await?
         .ok_or(AppError::Unauthorized)
 }
 
-async fn master(db: &Db, name: &MasterName) -> AppResult<Surreal<Any>> {
+pub(crate) async fn master(db: &Db, name: &MasterName) -> AppResult<Surreal<Any>> {
     db.system_session(&name.0)
         .await
         .map_err(|error| AppError::Internal(error.into()))

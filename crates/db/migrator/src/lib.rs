@@ -267,6 +267,7 @@ pub(crate) mod tests {
         Actor {
             member,
             via: Via::Ui,
+            client: None,
             session: None,
             request: None,
             ip: None,

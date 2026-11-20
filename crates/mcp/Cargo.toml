@@ -1,0 +1,17 @@
+[package]
+name = "resysto-mcp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+resysto-surrealdb = { path = "../db/surrealdb" }
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+surrealdb.workspace = true
+validator.workspace = true
+
+[lints]
+workspace = true

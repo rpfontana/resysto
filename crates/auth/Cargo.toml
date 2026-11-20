@@ -10,9 +10,11 @@ argon2.workspace = true
 axum.workspace = true
 axum-client-ip.workspace = true
 axum-extra.workspace = true
+base64.workspace = true
 cedar-policy.workspace = true
 hex.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 resysto-http = { path = "../http" }
 resysto-id = { path = "../id" }
 resysto-model = { path = "../model" }
@@ -28,6 +30,7 @@ totp-rs.workspace = true
 tracing.workspace = true
 unicode-normalization.workspace = true
 uuid.workspace = true
+url.workspace = true
 validator.workspace = true
 
 [dev-dependencies]

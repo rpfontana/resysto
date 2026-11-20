@@ -18,6 +18,7 @@ fn in_ui(member: RecordId) -> Actor {
     Actor {
         member,
         via: Via::Ui,
+        client: None,
         session: None,
         request: None,
         ip: None,

@@ -6,6 +6,7 @@ migrate = "run -p resysto-migrator --"
 RESYSTO_ADDR = "127.0.0.1:3000"
 RESYSTO_SITE = { value = "app/build", relative = true }
 RESYSTO_CLIENT_IP_SOURCE = "ConnectInfo"
+RESYSTO_PUBLIC_URL = "http://localhost:3000"
 
 RESYSTO_DB__ENDPOINT = "ws://127.0.0.1:18000"
 RESYSTO_DB__NAMESPACE = "resysto-dev"

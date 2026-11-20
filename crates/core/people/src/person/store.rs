@@ -1,5 +1,6 @@
 use resysto_model::{OrganizationId, PersonId};
 use resysto_surrealdb::{Error, Executor, Page, PageRequest, page};
+use surrealdb::types::SurrealValue;
 
 use super::model::{Person, PersonRecord};
 
@@ -22,6 +23,64 @@ pub(super) async fn list(
 ) -> Result<Page<PersonRecord>, Error> {
     let query = db.query(LIST);
     page(query, request).await
+}
+
+const SEARCH: &str = "SELECT * FROM person
+    WHERE id < type::record('person', $before)
+        AND ($text = NONE
+            OR string::lowercase(string::join(' ', first_name, last_name)) CONTAINS $text
+            OR string::lowercase(email ?? '') CONTAINS $text)
+        AND ($organization = NONE OR organization_ids CONTAINS $organization)
+    ORDER BY id DESC LIMIT $limit";
+
+/// `text` must be lowercase
+pub(super) async fn search(
+    db: &impl Executor,
+    text: Option<String>,
+    organization: Option<OrganizationId>,
+    request: PageRequest,
+) -> Result<Page<PersonRecord>, Error> {
+    let query = db
+        .query(SEARCH)
+        .bind(("text", text))
+        .bind(("organization", organization));
+    page(query, request).await
+}
+
+#[derive(Debug, SurrealValue)]
+pub(super) struct OrganizationName {
+    pub(super) id: OrganizationId,
+    pub(super) name: String,
+    pub(super) path: Vec<String>,
+}
+
+pub(super) async fn organization_names(
+    db: &impl Executor,
+    ids: Vec<OrganizationId>,
+) -> Result<Vec<OrganizationName>, Error> {
+    let names: Vec<OrganizationName> = db
+        .query("SELECT id, name, path.map(|$p| $p.name).filter(|$n| $n != NONE) AS path FROM $ids")
+        .bind(("ids", ids))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(names)
+}
+
+pub(super) async fn organizations_named(
+    db: &impl Executor,
+    name: &str,
+) -> Result<Vec<OrganizationName>, Error> {
+    let named: Vec<OrganizationName> = db
+        .query(
+            "SELECT id, name, path.map(|$p| $p.name).filter(|$n| $n != NONE) AS path
+             FROM organization WHERE string::lowercase(name) = $name LIMIT 5",
+        )
+        .bind(("name", name.trim().to_lowercase()))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(named)
 }
 
 pub(super) async fn missing_organizations(
@@ -95,6 +154,7 @@ mod tests {
         Actor {
             member,
             via: Via::Ui,
+            client: None,
             session: None,
             request: None,
             ip: None,

@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ops::Bound;
+use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use surrealdb::engine::any::Any;
@@ -42,13 +43,23 @@ impl Serialize for Cursor {
 impl<'de> Deserialize<'de> for Cursor {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
-        Uuid::try_parse(&raw)
-            .map(Self)
-            .map_err(|_| serde::de::Error::custom(InvalidCursor))
+        raw.parse().map_err(serde::de::Error::custom)
     }
 }
 
-struct InvalidCursor;
+impl FromStr for Cursor {
+    type Err = InvalidCursor;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Uuid::try_parse(raw).map(Self).map_err(|_| InvalidCursor)
+    }
+}
+
+/// A string that is not the `next_cursor` of a page
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidCursor;
+
+impl std::error::Error for InvalidCursor {}
 
 impl fmt::Display for InvalidCursor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -1,6 +1,7 @@
 //! The HTTP application
 
 mod config;
+mod mcp;
 mod routes;
 mod scope;
 mod shutdown;
@@ -19,12 +20,13 @@ pub async fn serve() -> anyhow::Result<()> {
     let Config {
         addr,
         site,
+        public_url,
         client_ip_source,
         db,
         auth,
     } = resysto_config::load()?;
 
-    let state = AppState::connect(db, auth).await?;
+    let state = AppState::connect(db, auth, &public_url).await?;
 
     tokio::spawn(resysto_auth::sweep_forever(
         state.db.clone(),

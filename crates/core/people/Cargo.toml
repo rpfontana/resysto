@@ -7,8 +7,10 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 resysto-http = { path = "../../http" }
+resysto-mcp = { path = "../../mcp" }
 resysto-model = { path = "../../model" }
 resysto-surrealdb = { path = "../../db/surrealdb" }
+schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 surrealdb.workspace = true
 thiserror.workspace = true
