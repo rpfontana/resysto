@@ -6,6 +6,7 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::SurrealValue;
 use tokio::task;
+use utoipa::ToSchema;
 
 use super::audit::{self, About, Client, Event};
 use super::error::AuthError;
@@ -23,14 +24,14 @@ impl Entity for Account {
 
 pub type AccountId = Id<Account>;
 
-#[derive(Debug, Clone, Serialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, SurrealValue, ToSchema)]
 pub(crate) struct AccountRecord {
     pub(crate) id: AccountId,
     pub(crate) email: Email,
 }
 
 /// An account as it sees itself
-#[derive(Debug, Serialize, SurrealValue)]
+#[derive(Debug, Serialize, SurrealValue, ToSchema)]
 pub(crate) struct Profile {
     pub(crate) id: AccountId,
     pub(crate) email: Email,

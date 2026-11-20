@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use surrealdb::engine::any::Any;
 use surrealdb::method::Query;
 use surrealdb::types::{RecordId, RecordIdKey, RecordIdKeyRange, SurrealValue, Value};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::Error;
@@ -16,9 +17,11 @@ const DEFAULT_LIMIT: u32 = 20;
 const MAX_LIMIT: u32 = 200;
 
 /// The page a caller asks for
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PageRequest {
     /// The `next_cursor` of the previous page; absent on the first one
+    #[param(value_type = Option<String>, format = Uuid)]
     pub after: Option<Cursor>,
     /// Rows wanted: 20 when absent, at least 1 and at most 200
     pub limit: Option<u32>,
@@ -68,10 +71,11 @@ impl fmt::Display for InvalidCursor {
 }
 
 /// One page of rows, and where the next one starts
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct Page<T> {
     pub data: Vec<T>,
     /// `None` on the last page
+    #[schema(value_type = Option<String>, format = Uuid)]
     pub next_cursor: Option<Cursor>,
 }
 

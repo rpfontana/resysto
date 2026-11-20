@@ -20,6 +20,10 @@
   - [Authentication and Authorization](./src/backend/http-layer/authentication.md)
   - [API Design](./src/backend/http-layer/api-design.md)
   - [Concurrent Writes](./src/backend/http-layer/concurrent-writes.md)
+- [MCP](./src/backend/mcp/README.md)
+  - [How a Call Runs](./src/backend/mcp/calls.md)
+  - [Writing Tools](./src/backend/mcp/tools.md)
+  - [Authorization](./src/backend/mcp/authorization.md)
 
 # Reference
 

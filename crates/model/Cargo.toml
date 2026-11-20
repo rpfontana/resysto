@@ -8,6 +8,7 @@ publish.workspace = true
 resysto-id = { path = "../id" }
 serde = { workspace = true, features = ["derive"] }
 surrealdb-types.workspace = true
+utoipa.workspace = true
 validator.workspace = true
 
 [dev-dependencies]

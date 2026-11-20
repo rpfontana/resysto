@@ -7,38 +7,44 @@ use axum_client_ip::ClientIpSource;
 use resysto_http::AppError;
 use tower_http::request_id::PropagateRequestIdLayer;
 use tower_http::set_header::{SetRequestHeaderLayer, SetResponseHeaderLayer};
+use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use crate::mcp::{Mcp, Mounted};
 use crate::state::AppState;
-use crate::{scope, site};
+use crate::{docs, scope, site};
 
 pub(crate) fn router(state: AppState, site_dir: &str, ip_source: ClientIpSource) -> Router {
-    Router::new()
-        .nest("/api/v1", api(account_routes()))
-        .nest("/t/{slug}/api/v1", api(tenant_routes(&state)))
-        .nest("/mcp", api(mcp_routes(&state, tools())))
-        .merge(oauth_routes())
+    let (rest, openapi) = rest(|tenant| members_only(tenant, &state)).split_for_parts();
+    let api = Router::new()
+        .merge(rest)
+        .nest("/mcp", api(mcp_routes(&state, tools())).into())
+        .merge(resysto_auth::oauth_router())
+        .merge(docs::router(&state, docs::document(openapi)));
+    with_request_ids(api)
         .with_state(state)
         .merge(site::router(site_dir))
         .layer(ip_source.into_extension())
 }
 
-// no cookie authenticates these routes, so they need no same-origin check
-fn oauth_routes() -> Router<AppState> {
-    with_request_ids(resysto_auth::oauth_router())
-}
-
-fn account_routes() -> Router<AppState> {
-    Router::new().nest("/auth", resysto_auth::router())
-}
-
-fn tenant_routes(state: &AppState) -> Router<AppState> {
-    Router::new()
+/// The REST API, whose handlers make its OpenAPI document; `guard` adds what lets a request into
+/// a tenant, which the document doesn't need
+pub(crate) fn rest(
+    guard: impl FnOnce(OpenApiRouter<AppState>) -> OpenApiRouter<AppState>,
+) -> OpenApiRouter<AppState> {
+    let account = OpenApiRouter::new().nest("/auth", resysto_auth::router());
+    let tenant = OpenApiRouter::new()
         .nest("/audit", resysto_auth::audit_router())
         .nest("/organizations", resysto_org::organization::router())
-        .nest("/people", resysto_people::person::router())
-        // route layers run from the last added: the member first, then its scope
+        .nest("/people", resysto_people::person::router());
+    OpenApiRouter::new()
+        .nest("/api/v1", api(account))
+        .nest("/t/{slug}/api/v1", api(guard(tenant)))
+}
+
+fn members_only(routes: OpenApiRouter<AppState>, state: &AppState) -> OpenApiRouter<AppState> {
+    // route layers run from the last added: the member first, then its scope
+    routes
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             scope::widen_to_branches,
@@ -66,9 +72,9 @@ fn tools() -> Vec<Mounted> {
 }
 
 // the tenant and its scope come with each call, not with the request
-pub(crate) fn mcp_routes(state: &AppState, tools: Vec<Mounted>) -> Router<AppState> {
+pub(crate) fn mcp_routes(state: &AppState, tools: Vec<Mounted>) -> OpenApiRouter<AppState> {
     let mcp = Mcp::new(state.db.clone(), Arc::clone(&state.policies), tools);
-    Router::new()
+    OpenApiRouter::new()
         .route_service("/", mcp.service(&state.public))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -78,15 +84,14 @@ pub(crate) fn mcp_routes(state: &AppState, tools: Vec<Mounted>) -> Router<AppSta
 
 // without its own fallback an unknown API path would get the SPA's page;
 // API answers must stay out of browser and proxy caches
-fn api(routes: Router<AppState>) -> Router<AppState> {
-    let routes = routes
+fn api(routes: OpenApiRouter<AppState>) -> OpenApiRouter<AppState> {
+    routes
         .fallback(async || AppError::NotFound)
         .layer(middleware::from_fn(resysto_auth::same_origin))
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
-        ));
-    with_request_ids(routes)
+        ))
 }
 
 // every request gets an x-request-id from the server, replacing any the client sent; the audit

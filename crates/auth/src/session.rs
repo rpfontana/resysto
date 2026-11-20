@@ -4,6 +4,7 @@ use serde::Serialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{Datetime, RecordId, SurrealValue};
+use utoipa::ToSchema;
 
 use super::account::AccountId;
 use super::audit::{self, About, Client, Event};
@@ -31,11 +32,13 @@ pub(crate) struct Session {
 }
 
 /// A live session of an account
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct SessionRecord {
     /// The SHA-256 of the session's token, never the token
     pub(crate) id: String,
+    #[schema(value_type = String, format = DateTime)]
     pub(crate) created_at: Datetime,
+    #[schema(value_type = String, format = DateTime)]
     pub(crate) last_seen_at: Datetime,
     pub(crate) user_agent: Option<String>,
     pub(crate) mfa: bool,

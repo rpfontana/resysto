@@ -71,6 +71,23 @@ impl<S: Send + Sync> FromRequestParts<S> for IfMatch {
     }
 }
 
+impl utoipa::IntoParams for IfMatch {
+    fn into_params(
+        _: impl Fn() -> Option<utoipa::openapi::path::ParameterIn>,
+    ) -> Vec<utoipa::openapi::path::Parameter> {
+        let parameter = utoipa::openapi::path::ParameterBuilder::new()
+            .name("If-Match")
+            .parameter_in(utoipa::openapi::path::ParameterIn::Header)
+            .required(utoipa::openapi::Required::True)
+            .description(Some("The ETag of the record's last read, such as \"3\""))
+            .schema(Some(utoipa::openapi::schema::Object::with_type(
+                utoipa::openapi::schema::Type::String,
+            )))
+            .build();
+        vec![parameter]
+    }
+}
+
 /// Where an authenticated and authorized request may go in its tenant, and who it writes as,
 /// which the server's middleware puts in the request extensions
 #[derive(Debug, Clone)]

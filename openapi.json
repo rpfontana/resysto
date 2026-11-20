@@ -1,0 +1,4165 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Resysto API",
+    "description": "The REST API of resysto. Errors answer `{ \"error\": { \"type\", \"message\" } }`; the routes of a tenant live under `/t/{slug}/api/v1`.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log in",
+        "description": "Checks an email and its password. With an authenticator app bound, the answer is `second_factor` and the login waits for a code",
+        "operationId": "auth_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`signed_in` sets the session cookie, `second_factor` the cookie of the login waiting for a code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_LoginStep"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "wrong email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too many failures in a row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login/totp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Complete a login with an authenticator code",
+        "operationId": "auth_login_totp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`signed_in`, with the session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_LoginStep"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no login is waiting, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "wrong code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too many failures in a row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login/recovery-code": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Complete a login with a recovery code",
+        "description": "The code stops working once used",
+        "operationId": "auth_login_recovery_code",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`signed_in`, with the session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_LoginStep"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no login is waiting, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "wrong code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too many failures in a row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log out",
+        "operationId": "auth_logout",
+        "responses": {
+          "204": {}
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get the signed-in account",
+        "description": "With the tenants it can enter and its roles in each",
+        "operationId": "auth_me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change the password",
+        "description": "Ends the account's other sessions",
+        "operationId": "auth_change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "400": {
+            "description": "the new password is too short or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "wrong current password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too many failures in a row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List the sessions",
+        "operationId": "auth_sessions_list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Vec_SessionRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "End the other sessions",
+        "operationId": "auth_sessions_end_others",
+        "responses": {
+          "204": {},
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "End a session",
+        "operationId": "auth_sessions_end",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The session's id, from the list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/totp/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start binding an authenticator app",
+        "description": "Answers the app's secret, which starts working once a code from the app confirms it",
+        "operationId": "auth_totp_setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TotpSetup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "an app is already bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "wrong password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/totp/confirm": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Confirm the authenticator app",
+        "description": "Answers the recovery codes, shown only this once",
+        "operationId": "auth_totp_confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_RecoveryCodes"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "no setup is waiting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "wrong code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/totp/disable": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Unbind the authenticator app",
+        "description": "Only from a session that proved the app",
+        "operationId": "auth_totp_disable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`mfa_required`: the session did not prove the app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "a tenant of the account requires it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "wrong password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/oauth/requests/{id}": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Get an app's authorization request",
+        "description": "What the consent page shows the member",
+        "operationId": "oauth_request_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ConsentRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown, expired or already answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/oauth/requests/{id}/approve": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Allow an app",
+        "description": "In the tenants chosen; the answer says where the browser goes back to the app",
+        "operationId": "oauth_request_approve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Approval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Next"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "no tenant chosen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`mfa_required`: a tenant chosen asks for a second factor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown, expired or already answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "a tenant chosen is not the account's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/oauth/requests/{id}/deny": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Refuse an app",
+        "operationId": "oauth_request_deny",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Next"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown, expired or already answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/audit/changes": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "List the changes",
+        "description": "The records written in the tenant, newest first, with who wrote them and how; `record` narrows the list to one record's history",
+        "operationId": "audit_changes_list",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent on the first one",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows wanted: 20 when absent, at least 1 and at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "record",
+            "in": "query",
+            "description": "`<table>:<uuid>`, such as `person:0190…`, for the history of one record",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Change"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`record` is not `<table>:<uuid>`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such tenant, or the account is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/audit/events": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "List the events",
+        "description": "What happened in the tenant without changing a record, such as a request the policies refused",
+        "operationId": "audit_events_list",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent on the first one",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows wanted: 20 when absent, at least 1 and at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_TenantEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such tenant, or the account is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/organizations": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List organizations",
+        "description": "The ones the member reaches, newest first",
+        "operationId": "organizations_list",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent on the first one",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows wanted: 20 when absent, at least 1 and at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_OrganizationRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such tenant, or the account is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create an organization",
+        "description": "At the root, or below `parent`",
+        "operationId": "organizations_create",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrganization"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_OrganizationRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such tenant, or the account is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "the parent is missing or too deep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/organizations/{id}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get an organization",
+        "operationId": "organizations_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_OrganizationRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Delete an organization",
+        "description": "Only one without branches that no record carries",
+        "operationId": "organizations_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag of the record's last read, such as \"3\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "it has branches, or records carry it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "the organization changed since its read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Update an organization",
+        "description": "A JSON Merge Patch; a new `parent` moves the whole branch",
+        "operationId": "organizations_update",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag of the record's last read, such as \"3\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_OrganizationRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "the organization changed since its read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "the move would make a cycle or a tree too deep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/organizations/{id}/reassign": {
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Reassign an organization's records",
+        "description": "Moves every record of the organization to another one, so that it can be deleted",
+        "operationId": "organizations_reassign",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reassign"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Reassigned"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "the target is missing or the same",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/people": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "List people",
+        "description": "The people of the organizations the member reaches, newest first",
+        "operationId": "people_list",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; absent on the first one",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows wanted: 20 when absent, at least 1 and at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PersonRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such tenant, or the account is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Create a person",
+        "operationId": "people_create",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPerson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PersonRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such tenant, or the account is not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "an organization is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/t/{slug}/api/v1/people/{id}": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Get a person",
+        "operationId": "people_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PersonId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PersonRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Delete a person",
+        "operationId": "people_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PersonId"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag of the record's last read, such as \"3\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "the person changed since its read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Update a person",
+        "description": "A JSON Merge Patch",
+        "operationId": "people_update",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The tenant's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PersonId"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag of the record's last read, such as \"3\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PersonRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "no live session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` by the member's roles, or `mfa_required` by the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "the person changed since its read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "an organization is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountId": {
+        "type": "string",
+        "format": "uuid",
+        "x-entity": "account"
+      },
+      "AccountRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          }
+        }
+      },
+      "ApiResponse_ConsentRequest": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "client_name",
+              "client_id",
+              "redirect_host",
+              "loopback",
+              "tenants"
+            ],
+            "properties": {
+              "client_name": {
+                "type": "string"
+              },
+              "client_id": {
+                "type": "string"
+              },
+              "redirect_host": {
+                "type": "string"
+              },
+              "loopback": {
+                "type": "boolean"
+              },
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConsentTenant"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ApiResponse_LoginStep": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "account",
+                  "step"
+                ],
+                "properties": {
+                  "account": {
+                    "$ref": "#/components/schemas/AccountRecord"
+                  },
+                  "step": {
+                    "type": "string",
+                    "enum": [
+                      "signed_in"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "step"
+                ],
+                "properties": {
+                  "step": {
+                    "type": "string",
+                    "enum": [
+                      "second_factor"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "What a login answers: signed in, or waiting for a code"
+          }
+        }
+      },
+      "ApiResponse_Me": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Profile"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "memberships"
+                ],
+                "properties": {
+                  "memberships": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/MemberOf"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "ApiResponse_Next": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "redirect"
+            ],
+            "properties": {
+              "redirect": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ApiResponse_OrganizationRecord": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "allOf": [
+              {
+                "type": "object",
+                "required": [
+                  "id",
+                  "version",
+                  "created_at",
+                  "created_by",
+                  "updated_at",
+                  "updated_by"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "x-entity": "organization"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Raised on every write; the ETag, which a write sends back in If-Match"
+                  },
+                  "created_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "created_by": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/MemberId"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "`null` when the system wrote it"
+                  },
+                  "updated_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "updated_by": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/MemberId"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "`null` when the system wrote it"
+                  }
+                }
+              },
+              {
+                "$ref": "#/components/schemas/Organization"
+              }
+            ]
+          }
+        }
+      },
+      "ApiResponse_PersonRecord": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "allOf": [
+              {
+                "type": "object",
+                "required": [
+                  "id",
+                  "version",
+                  "created_at",
+                  "created_by",
+                  "updated_at",
+                  "updated_by"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "x-entity": "person"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Raised on every write; the ETag, which a write sends back in If-Match"
+                  },
+                  "created_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "created_by": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/MemberId"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "`null` when the system wrote it"
+                  },
+                  "updated_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "updated_by": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/MemberId"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "`null` when the system wrote it"
+                  }
+                }
+              },
+              {
+                "$ref": "#/components/schemas/Person"
+              }
+            ]
+          }
+        }
+      },
+      "ApiResponse_Reassigned": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "reassigned"
+            ],
+            "properties": {
+              "reassigned": {
+                "type": "integer",
+                "format": "int64",
+                "description": "How many records moved",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      },
+      "ApiResponse_RecoveryCodes": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "recovery_codes"
+            ],
+            "properties": {
+              "recovery_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ApiResponse_TotpSetup": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "What an authenticator app needs to start producing codes",
+            "required": [
+              "secret",
+              "uri"
+            ],
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "Base32, for typing into the app"
+              },
+              "uri": {
+                "type": "string",
+                "description": "The `otpauth://` URI a QR code carries"
+              }
+            }
+          }
+        }
+      },
+      "ApiResponse_Vec_SessionRecord": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A live session of an account",
+              "required": [
+                "id",
+                "created_at",
+                "last_seen_at",
+                "mfa",
+                "current"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The SHA-256 of the session's token, never the token"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "last_seen_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "user_agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mfa": {
+                  "type": "boolean"
+                },
+                "current": {
+                  "type": "boolean",
+                  "description": "The session of the request that asked"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Approval": {
+        "type": "object",
+        "required": [
+          "tenants"
+        ],
+        "properties": {
+          "tenants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AuditChangeId": {
+        "type": "string",
+        "format": "uuid",
+        "x-entity": "audit_change"
+      },
+      "AuditEventId": {
+        "type": "string",
+        "format": "uuid",
+        "x-entity": "audit_event"
+      },
+      "Change": {
+        "type": "object",
+        "description": "A record a write created, updated or deleted, with who wrote and how",
+        "required": [
+          "id",
+          "at",
+          "event",
+          "table",
+          "record"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AuditChangeId"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          },
+          "record": {},
+          "by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "`None` when the system wrote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "CodeBody": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "ConsentRequest": {
+        "type": "object",
+        "required": [
+          "client_name",
+          "client_id",
+          "redirect_host",
+          "loopback",
+          "tenants"
+        ],
+        "properties": {
+          "client_name": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "redirect_host": {
+            "type": "string"
+          },
+          "loopback": {
+            "type": "boolean"
+          },
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsentTenant"
+            }
+          }
+        }
+      },
+      "ConsentTenant": {
+        "type": "object",
+        "required": [
+          "slug",
+          "roles",
+          "second_factor_needed"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "second_factor_needed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Country": {
+        "type": "string",
+        "description": "An ISO 3166-1 alpha-2 country code",
+        "example": "IT"
+      },
+      "Email": {
+        "type": "string",
+        "format": "email",
+        "description": "An email address, trimmed and lowercased",
+        "example": "mario.rossi@acme.it"
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "type",
+          "message"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ErrorKind"
+          },
+          "message": {
+            "type": "string",
+            "description": "In English, for people and agents; the SPA shows its own text for `type`"
+          },
+          "fields": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The messages of each invalid field, for `validation_error`",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ErrorKind": {
+        "type": "string",
+        "enum": [
+          "not_found",
+          "validation_error",
+          "unauthorized",
+          "forbidden",
+          "mfa_required",
+          "conflict",
+          "precondition_required",
+          "precondition_failed",
+          "unprocessable",
+          "too_many_requests",
+          "internal_error"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "The body of every error answer",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
+      "Industry": {
+        "type": "string",
+        "enum": [
+          "technology",
+          "finance",
+          "healthcare",
+          "manufacturing",
+          "retail",
+          "education",
+          "government",
+          "energy",
+          "transportation",
+          "telecommunications",
+          "real_estate",
+          "agriculture",
+          "entertainment",
+          "hospitality",
+          "other"
+        ]
+      },
+      "LoginBody": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginStep": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "account",
+              "step"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountRecord"
+              },
+              "step": {
+                "type": "string",
+                "enum": [
+                  "signed_in"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step"
+            ],
+            "properties": {
+              "step": {
+                "type": "string",
+                "enum": [
+                  "second_factor"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a login answers: signed in, or waiting for a code"
+      },
+      "Me": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Profile"
+          },
+          {
+            "type": "object",
+            "required": [
+              "memberships"
+            ],
+            "properties": {
+              "memberships": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MemberOf"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "MemberId": {
+        "type": "string",
+        "format": "uuid",
+        "x-entity": "member"
+      },
+      "MemberOf": {
+        "type": "object",
+        "description": "A ready tenant an account is a member of, as the account sees it",
+        "required": [
+          "slug",
+          "roles",
+          "mfa_required"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OrganizationId"
+            },
+            "description": "`None` reaches the whole tenant"
+          },
+          "mfa_required": {
+            "type": "boolean",
+            "description": "Whether the tenant lets the account in only with a second factor"
+          }
+        }
+      },
+      "NewOrganization": {
+        "type": "object",
+        "description": "The body of a create",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` when absent"
+          },
+          "org_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Country"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vat_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Industry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annual_income": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "employee_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewPerson": {
+        "type": "object",
+        "required": [
+          "first_name",
+          "last_name",
+          "organization_ids"
+        ],
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Next": {
+        "type": "object",
+        "required": [
+          "redirect"
+        ],
+        "properties": {
+          "redirect": {
+            "type": "string"
+          }
+        }
+      },
+      "Organization": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "active"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationId"
+            },
+            "description": "The ancestors from the root down to the parent"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "org_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Country"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vat_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Industry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annual_income": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "employee_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "OrganizationId": {
+        "type": "string",
+        "format": "uuid",
+        "x-entity": "organization"
+      },
+      "OrganizationPatch": {
+        "type": "object",
+        "description": "The body of a JSON Merge Patch: an absent field stays, `null` clears it",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationId",
+                "description": "`null` moves the organization and its branch to the root"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "org_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Country"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vat_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Industry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annual_income": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "employee_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrganizationRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "version",
+              "created_at",
+              "created_by",
+              "updated_at",
+              "updated_by"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "x-entity": "organization"
+              },
+              "version": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Raised on every write; the ETag, which a write sends back in If-Match"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_by": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MemberId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`null` when the system wrote it"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_by": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MemberId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`null` when the system wrote it"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Organization"
+          }
+        ]
+      },
+      "Page_Change": {
+        "type": "object",
+        "description": "One page of rows, and where the next one starts",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A record a write created, updated or deleted, with who wrote and how",
+              "required": [
+                "id",
+                "at",
+                "event",
+                "table",
+                "record"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/AuditChangeId"
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "event": {
+                  "type": "string"
+                },
+                "table": {
+                  "type": "string"
+                },
+                "record": {},
+                "by": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/MemberId",
+                      "description": "`None` when the system wrote"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "by_email": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "via": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "client": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "session": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "request": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ip": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "user_agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "before": {},
+                "after": {}
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`None` on the last page"
+          }
+        }
+      },
+      "Page_OrganizationRecord": {
+        "type": "object",
+        "description": "One page of rows, and where the next one starts",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "version",
+                    "created_at",
+                    "created_by",
+                    "updated_at",
+                    "updated_by"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "x-entity": "organization"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "format": "int64",
+                      "description": "Raised on every write; the ETag, which a write sends back in If-Match"
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "created_by": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/MemberId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "`null` when the system wrote it"
+                    },
+                    "updated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updated_by": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/MemberId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "`null` when the system wrote it"
+                    }
+                  }
+                },
+                {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              ]
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`None` on the last page"
+          }
+        }
+      },
+      "Page_PersonRecord": {
+        "type": "object",
+        "description": "One page of rows, and where the next one starts",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "version",
+                    "created_at",
+                    "created_by",
+                    "updated_at",
+                    "updated_by"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "x-entity": "person"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "format": "int64",
+                      "description": "Raised on every write; the ETag, which a write sends back in If-Match"
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "created_by": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/MemberId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "`null` when the system wrote it"
+                    },
+                    "updated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updated_by": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/MemberId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "`null` when the system wrote it"
+                    }
+                  }
+                },
+                {
+                  "$ref": "#/components/schemas/Person"
+                }
+              ]
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`None` on the last page"
+          }
+        }
+      },
+      "Page_TenantEvent": {
+        "type": "object",
+        "description": "One page of rows, and where the next one starts",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "What happened in the tenant without changing a record",
+              "required": [
+                "id",
+                "at",
+                "event"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/AuditEventId"
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "event": {
+                  "type": "string"
+                },
+                "by": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/MemberId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "by_email": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "via": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "client": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "session": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "request": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ip": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "user_agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "action": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "resource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`None` on the last page"
+          }
+        }
+      },
+      "PasswordBody": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "PasswordChange": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string"
+          }
+        }
+      },
+      "Person": {
+        "type": "object",
+        "required": [
+          "first_name",
+          "last_name",
+          "organization_ids"
+        ],
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        }
+      },
+      "PersonPatch": {
+        "type": "object",
+        "description": "The body of a JSON Merge Patch: an absent field stays, `null` clears it",
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PersonRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "version",
+              "created_at",
+              "created_by",
+              "updated_at",
+              "updated_by"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "x-entity": "person"
+              },
+              "version": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Raised on every write; the ETag, which a write sends back in If-Match"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_by": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MemberId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`null` when the system wrote it"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_by": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MemberId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "`null` when the system wrote it"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Person"
+          }
+        ]
+      },
+      "Profile": {
+        "type": "object",
+        "description": "An account as it sees itself",
+        "required": [
+          "id",
+          "email",
+          "totp",
+          "recovery_codes_left"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "totp": {
+            "type": "boolean",
+            "description": "Whether an authenticator app is bound"
+          },
+          "recovery_codes_left": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Reassign": {
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/OrganizationId",
+            "description": "The organization that takes the records over"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Reassigned": {
+        "type": "object",
+        "required": [
+          "reassigned"
+        ],
+        "properties": {
+          "reassigned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many records moved",
+            "minimum": 0
+          }
+        }
+      },
+      "RecoveryCodes": {
+        "type": "object",
+        "required": [
+          "recovery_codes"
+        ],
+        "properties": {
+          "recovery_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SessionRecord": {
+        "type": "object",
+        "description": "A live session of an account",
+        "required": [
+          "id",
+          "created_at",
+          "last_seen_at",
+          "mfa",
+          "current"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The SHA-256 of the session's token, never the token"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mfa": {
+            "type": "boolean"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "The session of the request that asked"
+          }
+        }
+      },
+      "TenantEvent": {
+        "type": "object",
+        "description": "What happened in the tenant without changing a record",
+        "required": [
+          "id",
+          "at",
+          "event"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AuditEventId"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event": {
+            "type": "string"
+          },
+          "by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TotpSetup": {
+        "type": "object",
+        "description": "What an authenticator app needs to start producing codes",
+        "required": [
+          "secret",
+          "uri"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "Base32, for typing into the app"
+          },
+          "uri": {
+            "type": "string",
+            "description": "The `otpauth://` URI a QR code carries"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-session"
+      }
+    }
+  }
+}

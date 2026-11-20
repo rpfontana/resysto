@@ -88,7 +88,7 @@ async fn send(
         request = request.header(header::IF_MATCH, if_match);
     }
     let request = request.body(Body::from(body.to_string())).unwrap();
-    let response = person::router()
+    let response = axum::Router::<Db>::from(person::router())
         .with_state(db.clone())
         .oneshot(request)
         .await

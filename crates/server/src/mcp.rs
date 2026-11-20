@@ -311,7 +311,6 @@ mod tests {
         Cipher, MasterName, Passwords, add_member, create_account, create_grant, issue_access_token,
     };
     use resysto_model::{Email, OrganizationId};
-    use resysto_surrealdb::Db;
     use schemars::JsonSchema;
     use secrecy::SecretString;
     use serde::Deserialize;
@@ -323,28 +322,9 @@ mod tests {
     use super::*;
     use crate::routes::mcp_routes;
     use crate::state::AppState;
+    use crate::testing;
 
     const CLAUDE: &str = "https://claude.ai/oauth/claude-code-client-metadata";
-
-    #[derive(Deserialize)]
-    struct Config {
-        db: DbConfig,
-        auth: AuthConfig,
-    }
-
-    #[derive(Deserialize)]
-    struct DbConfig {
-        endpoint: String,
-        namespace: String,
-        migrator_user: String,
-        migrator_password: SecretString,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthConfig {
-        signing_key: SecretString,
-        verifying_key: String,
-    }
 
     #[derive(Deserialize, JsonSchema)]
     struct Nothing {}
@@ -358,17 +338,7 @@ mod tests {
 
     // beta needs no database; the extra tool claims to read but tries to write
     async fn stack() -> Stack {
-        let Config { db, auth } = resysto_config::load().unwrap();
-        let server = Db::connect(resysto_surrealdb::Config {
-            endpoint: db.endpoint,
-            namespace: db.namespace,
-            username: db.migrator_user,
-            password: db.migrator_password,
-            signing_key: auth.signing_key,
-            verifying_key: auth.verifying_key,
-        })
-        .await
-        .unwrap();
+        let server = testing::server().await;
         let id = Uuid::new_v4().simple();
         let (master_name, tenant_name) = (format!("t_test_{id}_master"), format!("t_test_{id}"));
         resysto_migrator::provision_master(&server, &master_name)
@@ -472,7 +442,7 @@ mod tests {
             public: PublicUrl("http://localhost:3000".into()),
         };
         let app = Router::new()
-            .nest("/mcp", mcp_routes(&state, tools))
+            .nest("/mcp", Router::from(mcp_routes(&state, tools)))
             .with_state(state);
         Stack {
             app,

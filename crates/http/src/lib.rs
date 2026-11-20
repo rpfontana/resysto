@@ -1,15 +1,16 @@
 mod error;
 mod extract;
 
-pub use error::{AppError, AppResult};
+pub use error::{AppError, AppResult, ErrorBody, ErrorKind, ErrorResponse};
 pub use extract::{IfMatch, Path, Query, TenantAccess, TenantDb, ValidatedJson};
 
 use axum::Json;
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ApiResponse<T> {
     pub data: T,
 }

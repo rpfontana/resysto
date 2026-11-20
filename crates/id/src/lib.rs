@@ -221,6 +221,50 @@ mod surreal {
     }
 }
 
+// a uuid string that names its table in `x-entity`, which the SPA turns into a branded type
+mod schema {
+    use std::borrow::Cow;
+
+    use utoipa::ToSchema;
+    use utoipa::openapi::RefOr;
+    use utoipa::openapi::extensions::ExtensionsBuilder;
+    use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, Schema, SchemaFormat, Type};
+
+    use super::{Entity, Id};
+
+    // `PartialSchema` comes from utoipa's blanket impl over this hidden trait, which the derives
+    // also call for a field such as `Option<Id<T>>`
+    impl<T: Entity> utoipa::__dev::ComposeSchema for Id<T> {
+        fn compose(_: Vec<RefOr<Schema>>) -> RefOr<Schema> {
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Uuid)))
+                .extensions(Some(
+                    ExtensionsBuilder::new().add("x-entity", T::TABLE).build(),
+                ))
+                .into()
+        }
+    }
+
+    // `person` is `PersonId`: one component per table, where the default name is `Id` for all
+    impl<T: Entity> ToSchema for Id<T> {
+        fn name() -> Cow<'static, str> {
+            let name: String = T::TABLE
+                .split('_')
+                .flat_map(|word| {
+                    let mut chars = word.chars();
+                    chars
+                        .next()
+                        .map(|first| first.to_ascii_uppercase())
+                        .into_iter()
+                        .chain(chars)
+                })
+                .collect();
+            Cow::Owned(format!("{name}Id"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

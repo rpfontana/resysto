@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use surrealdb_types::{Kind, SurrealValue, Value, conversion_error};
+use utoipa::ToSchema;
 
 /// ISO 3166-1 alpha-2 codes, sorted
 const CODES: [&str; 249] = [
@@ -26,7 +27,8 @@ const CODES: [&str; 249] = [
 ];
 
 /// An ISO 3166-1 alpha-2 country code
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ToSchema)]
+#[schema(value_type = String, example = "IT")]
 pub struct Country(&'static str);
 
 /// A value that is not an ISO 3166-1 alpha-2 code

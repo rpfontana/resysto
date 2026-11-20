@@ -4,6 +4,7 @@ use serde::Serialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
+use utoipa::ToSchema;
 
 use super::account::AccountId;
 use super::audit::{self, About, Event};
@@ -22,7 +23,7 @@ pub(crate) struct Membership {
 }
 
 /// A ready tenant an account is a member of, as the account sees it
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub(crate) struct MemberOf {
     pub(crate) slug: String,
     pub(crate) roles: Vec<String>,

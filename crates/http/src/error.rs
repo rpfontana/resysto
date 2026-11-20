@@ -4,8 +4,42 @@ use axum::Json;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use serde_json::json;
+use serde::Serialize;
+use utoipa::ToSchema;
 use validator::ValidationErrors;
+
+/// The body of every error answer
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorResponse {
+    pub error: ErrorBody,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorBody {
+    #[serde(rename = "type")]
+    pub kind: ErrorKind,
+    /// In English, for people and agents; the SPA shows its own text for `type`
+    pub message: String,
+    /// The messages of each invalid field, for `validation_error`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<BTreeMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorKind {
+    NotFound,
+    ValidationError,
+    Unauthorized,
+    Forbidden,
+    MfaRequired,
+    Conflict,
+    PreconditionRequired,
+    PreconditionFailed,
+    Unprocessable,
+    TooManyRequests,
+    InternalError,
+}
 
 /// An API error, answered as `{ "error": { "type", "message" } }`
 #[derive(Debug, thiserror::Error)]
@@ -48,34 +82,46 @@ pub type AppResult<T> = Result<T, AppError>;
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, kind) = match &self {
-            Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+            Self::NotFound => (StatusCode::NOT_FOUND, ErrorKind::NotFound),
             Self::Validation(_) | Self::ValidationFields(_) => {
-                (StatusCode::BAD_REQUEST, "validation_error")
+                (StatusCode::BAD_REQUEST, ErrorKind::ValidationError)
             }
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
-            Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
-            Self::MfaRequired => (StatusCode::FORBIDDEN, "mfa_required"),
-            Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
-            Self::PreconditionRequired => {
-                (StatusCode::PRECONDITION_REQUIRED, "precondition_required")
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, ErrorKind::Unauthorized),
+            Self::Forbidden => (StatusCode::FORBIDDEN, ErrorKind::Forbidden),
+            Self::MfaRequired => (StatusCode::FORBIDDEN, ErrorKind::MfaRequired),
+            Self::Conflict(_) => (StatusCode::CONFLICT, ErrorKind::Conflict),
+            Self::PreconditionRequired => (
+                StatusCode::PRECONDITION_REQUIRED,
+                ErrorKind::PreconditionRequired,
+            ),
+            Self::PreconditionFailed(_) => (
+                StatusCode::PRECONDITION_FAILED,
+                ErrorKind::PreconditionFailed,
+            ),
+            Self::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, ErrorKind::Unprocessable),
+            Self::TooManyRequests { .. } => {
+                (StatusCode::TOO_MANY_REQUESTS, ErrorKind::TooManyRequests)
             }
-            Self::PreconditionFailed(_) => (StatusCode::PRECONDITION_FAILED, "precondition_failed"),
-            Self::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, "unprocessable"),
-            Self::TooManyRequests { .. } => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             Self::Internal(error) => {
                 // the only place the details are visible
                 tracing::error!(error = ?error, "internal server error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+                (StatusCode::INTERNAL_SERVER_ERROR, ErrorKind::InternalError)
             }
         };
-        let body = match &self {
-            Self::ValidationFields(fields) => json!({
-                "error": { "type": kind, "message": self.to_string(), "fields": fields }
-            }),
-            Self::Internal(_) => json!({
-                "error": { "type": kind, "message": "an internal error occurred" }
-            }),
-            _ => json!({ "error": { "type": kind, "message": self.to_string() } }),
+        let message = match &self {
+            Self::Internal(_) => "an internal error occurred".to_owned(),
+            other => other.to_string(),
+        };
+        let fields = match &self {
+            Self::ValidationFields(fields) => Some(fields.clone()),
+            _ => None,
+        };
+        let body = ErrorResponse {
+            error: ErrorBody {
+                kind,
+                message,
+                fields,
+            },
         };
         let mut response = (status, Json(body)).into_response();
         if let Self::TooManyRequests {

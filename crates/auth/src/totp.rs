@@ -6,6 +6,7 @@ use rand::seq::IndexedRandom;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use totp_rs::{Builder, Secret, Totp, TotpError};
+use utoipa::ToSchema;
 
 use super::account::AccountId;
 
@@ -35,7 +36,7 @@ pub enum CipherError {
 }
 
 /// What an authenticator app needs to start producing codes
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct TotpSetup {
     /// Base32, for typing into the app
     pub(crate) secret: String,

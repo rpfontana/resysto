@@ -9,7 +9,7 @@ use axum::{Form, Json, Router};
 use axum_extra::extract::CookieJar;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use resysto_http::{ApiResponse, AppError, AppResult, Path, Query, ValidatedJson};
+use resysto_http::{ApiResponse, AppError, AppResult, ErrorResponse, Path, Query, ValidatedJson};
 use resysto_id::{Entity, Id};
 use resysto_surrealdb::{Db, Executor, transaction};
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
 use url::Url;
+use utoipa::{IntoParams, ToSchema};
 use validator::Validate;
 
 use super::account::AccountId;
@@ -292,7 +293,7 @@ async fn begin(
     Ok(format!("{}{CONSENT_PAGE}?request={id}", public.0))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ConsentRequest {
     client_name: String,
     client_id: String,
@@ -301,7 +302,7 @@ pub(crate) struct ConsentRequest {
     tenants: Vec<ConsentTenant>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ConsentTenant {
     slug: String,
     roles: Vec<String>,
@@ -330,11 +331,26 @@ async fn pending(master: &Surreal<Any>, id: &str) -> Result<Option<Pending>, Aut
     Ok(found)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Path)]
 pub(crate) struct RequestPath {
     id: String,
 }
 
+/// Get an app's authorization request
+///
+/// What the consent page shows the member
+#[utoipa::path(
+    get,
+    operation_id = "oauth_request_get",
+    path = "/oauth/requests/{id}",
+    tag = "oauth",
+    params(RequestPath),
+    responses(
+        (status = 200, body = ApiResponse<ConsentRequest>),
+        (status = 404, body = ErrorResponse, description = "unknown, expired or already answered"),
+    ),
+)]
 pub(crate) async fn consent_request(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -369,17 +385,35 @@ pub(crate) async fn consent_request(
     }))
 }
 
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 pub(crate) struct Approval {
     #[validate(length(min = 1, message = "choose at least one tenant"))]
     tenants: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct Next {
     redirect: String,
 }
 
+/// Allow an app
+///
+/// In the tenants chosen; the answer says where the browser goes back to the app
+#[utoipa::path(
+    post,
+    operation_id = "oauth_request_approve",
+    path = "/oauth/requests/{id}/approve",
+    tag = "oauth",
+    params(RequestPath),
+    request_body = Approval,
+    responses(
+        (status = 200, body = ApiResponse<Next>),
+        (status = 400, body = ErrorResponse, description = "no tenant chosen"),
+        (status = 403, body = ErrorResponse, description = "`mfa_required`: a tenant chosen asks for a second factor"),
+        (status = 404, body = ErrorResponse, description = "unknown, expired or already answered"),
+        (status = 422, body = ErrorResponse, description = "a tenant chosen is not the account's"),
+    ),
+)]
 pub(crate) async fn approve(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -517,6 +551,18 @@ async fn allow(
     Ok(redirect.into())
 }
 
+/// Refuse an app
+#[utoipa::path(
+    post,
+    operation_id = "oauth_request_deny",
+    path = "/oauth/requests/{id}/deny",
+    tag = "oauth",
+    params(RequestPath),
+    responses(
+        (status = 200, body = ApiResponse<Next>),
+        (status = 404, body = ErrorResponse, description = "unknown, expired or already answered"),
+    ),
+)]
 pub(crate) async fn deny(
     State(db): State<Db>,
     State(name): State<MasterName>,

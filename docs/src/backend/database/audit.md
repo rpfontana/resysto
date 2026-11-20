@@ -7,8 +7,8 @@ Two tables in every tenant database do the recording, and a third in the master:
 | Table | What it holds | Who writes it |
 |---|---|---|
 | `audit_change` (tenant) | one row per record created, updated or deleted, with the record before and after | an event on each table, in the transaction of the write |
-| `audit_event` (tenant) | what happened without changing a record: a request the policies refused | the server |
-| `audit_event` (master) | logins, failed logins, logouts, second factors, password changes, ended sessions, new accounts, new members, unlocked emails | `resysto-auth` |
+| `audit_event` (tenant) | what happened without changing a record: a request or a tool call the policies refused | the server |
+| `audit_event` (master) | logins, failed logins, logouts, second factors, password changes, ended sessions, new accounts, new members, unlocked emails; apps allowed or refused, issued access tokens, reused refresh tokens, revoked grants | `resysto-auth` |
 
 Every row's key is a UUID v7, so the keys sort by time: lists read the newest first, and the retention deletes a range of keys.
 
@@ -42,10 +42,13 @@ DEFINE EVENT OVERWRITE audit ON person THEN {
         after: $after,
         before: $before,
         by: $auth,
+        client: $token.client,
         event: $event,
+        ip: $token.ip,
         record: $value.id,
         request: $token.rid,
         session: $token.sid,
+        user_agent: $token.ua,
         via: $token.via,
     };
 };
@@ -62,8 +65,9 @@ The server opens a record session for each request with a token it signs itself.
 | Claim | Read as | Holds |
 |---|---|---|
 | `ID` | `$auth` | `member:<uuid>`, the member, whose key is its account's |
-| `via` | `$token.via` | the channel: `ui` for the SPA; `mcp` and `job` arrive with their channels |
-| `sid` | `$token.sid` | the key of the browser session |
+| `via` | `$token.via` | the channel: `ui` for the SPA, `mcp` for an agent; `job` arrives with the jobs |
+| `client` | `$token.client` | for `mcp`, the `client_id` of the agent's app |
+| `sid` | `$token.sid` | the key of the browser session, or of the agent's access token |
 | `rid` | `$token.rid` | the request's `x-request-id`, shared by every change the request makes |
 | `ip` | `$token.ip` | the address the request came from |
 | `ua` | `$token.ua` | the browser's `User-Agent`, cut at 200 characters |
@@ -100,7 +104,7 @@ GET /t/{slug}/api/v1/audit/changes?record=person:<uuid>     the history of one r
 GET /t/{slug}/api/v1/audit/events                           the refused requests
 ```
 
-The lists are paged like the others, with `after` and `limit`. Each change carries `table`, `record`, `event`, `by`, `by_email`, `via`, `session`, `request`, `ip`, `user_agent`, `before` and `after`. Only a `tenant/admin` who reaches the whole tenant may read them, since the audit shows every record of the tenant: the policy `audit/whole-tenant-admins` refuses everyone else. The handlers then read with a system session, because no record session sees the audit tables.
+The lists are paged like the others, with `after` and `limit`. Each change carries `table`, `record`, `event`, `by`, `by_email`, `via`, `client`, `session`, `request`, `ip`, `user_agent`, `before` and `after`. Only a `tenant/admin` who reaches the whole tenant may read them, since the audit shows every record of the tenant: the policy `audit/whole-tenant-admins` refuses everyone else. The handlers then read with a system session, because no record session sees the audit tables.
 
 ## Retention
 

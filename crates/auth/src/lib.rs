@@ -25,7 +25,7 @@ pub use account::{Account, AccountId, create_account};
 pub use agent::{Agent, AgentTenant, PublicUrl, require_agent};
 pub use audit::{Client, audit_router, record_refusal};
 pub use error::AuthError;
-pub use http::{MasterName, TenantMember, TenantPath, require_member, router};
+pub use http::{MasterName, TenantMember, TenantPath, require_member, require_session, router};
 pub use membership::add_member;
 pub use mfa::{MfaRequiredFor, require_mfa, reset_totp};
 pub use oauth::{GrantId, OAuthGrant, create_grant, issue_access_token, oauth_router};

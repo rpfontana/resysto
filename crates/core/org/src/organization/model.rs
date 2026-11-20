@@ -4,12 +4,13 @@ use resysto_model::input::{nullable, present, trimmed};
 use resysto_model::{Country, Email, OrganizationId, Record};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
+use utoipa::ToSchema;
 use validator::{Validate, ValidationError};
 
 /// How many levels an organization can sit below its root
 pub const MAX_DEPTH: usize = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, SurrealValue, ToSchema)]
 #[serde(rename_all = "snake_case")]
 // untagged writes each variant as its name, the form the schema's literal union expects
 #[surreal(untagged, rename_all = "snake_case")]
@@ -31,7 +32,7 @@ pub enum Industry {
     Other,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, SurrealValue)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, SurrealValue, ToSchema)]
 pub struct Organization {
     pub name: String,
     pub parent: Option<OrganizationId>,
@@ -57,7 +58,7 @@ pub struct Organization {
 pub type OrganizationRecord = Record<resysto_model::Organization, Organization>;
 
 /// The body of a create
-#[derive(Debug, Clone, Default, Deserialize, Validate)]
+#[derive(Debug, Clone, Default, Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewOrganization {
     #[validate(custom(function = "organization_name"))]
@@ -120,16 +121,18 @@ pub struct NewOrganization {
 }
 
 /// The body of a JSON Merge Patch: an absent field stays, `null` clears it
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Validate)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OrganizationPatch {
     #[serde(default, deserialize_with = "present")]
+    #[schema(nullable = false)]
     #[validate(custom(function = "organization_name"))]
     pub name: Option<String>,
     /// `null` moves the organization and its branch to the root
     #[serde(default, deserialize_with = "nullable")]
     pub parent: Option<Option<OrganizationId>>,
     #[serde(default, deserialize_with = "present")]
+    #[schema(nullable = false)]
     pub active: Option<bool>,
     #[serde(default, deserialize_with = "nullable")]
     #[validate(

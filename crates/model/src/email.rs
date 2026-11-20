@@ -4,10 +4,12 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use surrealdb_types::{Kind, SurrealValue, Value, conversion_error};
+use utoipa::ToSchema;
 use validator::ValidateEmail;
 
 /// An email address, trimmed and lowercased
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, ToSchema)]
+#[schema(format = Email, example = "mario.rossi@acme.it")]
 pub struct Email(String);
 
 /// A value that is not an email address

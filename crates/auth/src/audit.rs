@@ -1,9 +1,8 @@
 use std::net::IpAddr;
 
 use axum::extract::{FromRef, State};
-use axum::routing::get;
-use axum::{Extension, Json, Router};
-use resysto_http::{AppError, AppResult, Query, TenantAccess};
+use axum::{Extension, Json};
+use resysto_http::{AppError, AppResult, ErrorResponse, Query, TenantAccess};
 use resysto_id::{Entity, Id};
 use resysto_model::MemberId;
 use resysto_surrealdb::{Actor, Cursor, Db, Executor, Page, PageRequest, page};
@@ -11,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{Datetime, RecordId, SurrealValue};
+use utoipa::{IntoParams, ToSchema};
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 use super::account::AccountId;
 use super::error::AuthError;
@@ -93,16 +95,21 @@ impl Entity for ChangeRow {
     const TABLE: &'static str = "audit_change";
 }
 
+type ChangeId = Id<ChangeRow>;
+
 enum EventRow {}
 
 impl Entity for EventRow {
     const TABLE: &'static str = "audit_event";
 }
 
+type EventId = Id<EventRow>;
+
 /// A record a write created, updated or deleted, with who wrote and how
-#[derive(Debug, Serialize, SurrealValue)]
+#[derive(Debug, Serialize, SurrealValue, ToSchema)]
 struct Change {
-    id: Id<ChangeRow>,
+    id: ChangeId,
+    #[schema(value_type = String, format = DateTime)]
     at: Datetime,
     event: String,
     table: String,
@@ -121,9 +128,10 @@ struct Change {
 }
 
 /// What happened in the tenant without changing a record
-#[derive(Debug, Serialize, SurrealValue)]
+#[derive(Debug, Serialize, SurrealValue, ToSchema)]
 struct TenantEvent {
-    id: Id<EventRow>,
+    id: EventId,
+    #[schema(value_type = String, format = DateTime)]
     at: Datetime,
     event: String,
     by: Option<MemberId>,
@@ -138,9 +146,13 @@ struct TenantEvent {
     resource: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct ChangesQuery {
+    /// The `next_cursor` of the previous page; absent on the first one
+    #[param(value_type = Option<String>, format = Uuid)]
     after: Option<Cursor>,
+    /// Rows wanted: 20 when absent, at least 1 and at most 200
     limit: Option<u32>,
     /// `<table>:<uuid>`, such as `person:0190…`, for the history of one record
     record: Option<String>,
@@ -165,14 +177,14 @@ const EVENTS: &str =
      ORDER BY id DESC LIMIT $limit";
 
 /// The routes of `/t/{slug}/api/v1/audit`
-pub fn audit_router<S>() -> Router<S>
+pub fn audit_router<S>() -> OpenApiRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     Db: FromRef<S>,
 {
-    Router::new()
-        .route("/changes", get(changes))
-        .route("/events", get(events))
+    OpenApiRouter::new()
+        .routes(routes!(changes))
+        .routes(routes!(events))
 }
 
 pub(crate) async fn record(
@@ -233,6 +245,20 @@ pub async fn record_refusal(
 
 // the audit tables refuse every record session: the policies already kept out all but the
 // admins of the whole tenant
+/// List the changes
+///
+/// The records written in the tenant, newest first, with who wrote them and how; `record` narrows the list to one record's history
+#[utoipa::path(
+    get,
+    operation_id = "audit_changes_list",
+    path = "/changes",
+    tag = "audit",
+    params(ChangesQuery),
+    responses(
+        (status = 200, body = Page<Change>),
+        (status = 400, body = ErrorResponse, description = "`record` is not `<table>:<uuid>`"),
+    ),
+)]
 async fn changes(
     State(db): State<Db>,
     Extension(access): Extension<TenantAccess>,
@@ -257,6 +283,17 @@ async fn changes(
     Ok(Json(found.map_err(internal)?))
 }
 
+/// List the events
+///
+/// What happened in the tenant without changing a record, such as a request the policies refused
+#[utoipa::path(
+    get,
+    operation_id = "audit_events_list",
+    path = "/events",
+    tag = "audit",
+    params(PageRequest),
+    responses((status = 200, body = Page<TenantEvent>)),
+)]
 async fn events(
     State(db): State<Db>,
     Extension(access): Extension<TenantAccess>,
@@ -375,7 +412,7 @@ mod tests {
             .extension(access)
             .body(Body::empty())
             .unwrap();
-        let response = audit_router()
+        let response = axum::Router::<Db>::from(audit_router())
             .with_state(server.clone())
             .oneshot(request)
             .await
@@ -480,7 +517,7 @@ mod tests {
         );
         assert_eq!(refusal["by"], Value::from(member.to_string()));
 
-        let refused = audit_router()
+        let refused = axum::Router::<Db>::from(audit_router())
             .with_state(server.clone())
             .oneshot(
                 Request::get("/changes?record=organization")

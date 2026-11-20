@@ -1,22 +1,24 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{FromRef, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::routing::{delete, get, post};
-use axum::{Json, Router};
 use axum_client_ip::{ClientIp, Rejection};
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use resysto_http::{ApiResponse, AppError, AppResult, Path, ValidatedJson};
+use resysto_http::{ApiResponse, AppError, AppResult, ErrorResponse, Path, ValidatedJson};
 use resysto_model::{Email, OrganizationId};
 use resysto_surrealdb::{Actor, Db, Via};
 use serde::{Deserialize, Serialize};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 use validator::Validate;
 
 use super::account::{self, AccountRecord, Profile};
@@ -65,7 +67,7 @@ pub struct TenantPath {
 }
 
 /// The routes of `/api/v1/auth`
-pub fn router<S>() -> Router<S>
+pub fn router<S>() -> OpenApiRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     Db: FromRef<S>,
@@ -74,21 +76,33 @@ where
     Cipher: FromRef<S>,
     PublicUrl: FromRef<S>,
 {
-    Router::new()
-        .route("/login", post(login))
-        .route("/login/totp", post(login_with_totp))
-        .route("/login/recovery-code", post(login_with_recovery_code))
-        .route("/logout", post(logout))
-        .route("/me", get(me))
-        .route("/password", post(change_password))
-        .route("/sessions", get(sessions).delete(end_other_sessions))
-        .route("/sessions/{id}", delete(end_session))
-        .route("/totp/setup", post(set_up_totp))
-        .route("/totp/confirm", post(confirm_totp))
-        .route("/totp/disable", post(disable_totp))
-        .route("/oauth/requests/{id}", get(oauth::consent_request))
-        .route("/oauth/requests/{id}/approve", post(oauth::approve))
-        .route("/oauth/requests/{id}/deny", post(oauth::deny))
+    OpenApiRouter::new()
+        .routes(routes!(login))
+        .routes(routes!(login_with_totp))
+        .routes(routes!(login_with_recovery_code))
+        .routes(routes!(logout))
+        .routes(routes!(me))
+        .routes(routes!(change_password))
+        .routes(routes!(sessions, end_other_sessions))
+        .routes(routes!(end_session))
+        .routes(routes!(set_up_totp))
+        .routes(routes!(confirm_totp))
+        .routes(routes!(disable_totp))
+        .routes(routes!(oauth::consent_request))
+        .routes(routes!(oauth::approve))
+        .routes(routes!(oauth::deny))
+}
+
+/// Lets a request through only with a live session, of any account
+pub async fn require_session(
+    State(db): State<Db>,
+    State(name): State<MasterName>,
+    jar: CookieJar,
+    request: Request,
+    next: Next,
+) -> AppResult<Response> {
+    signed_in(&master(&db, &name).await?, &jar).await?;
+    Ok(next.run(request).await)
 }
 
 /// Lets a request through to a tenant's routes only with a live session of one of its members,
@@ -168,48 +182,64 @@ fn resource(path: &str) -> &str {
         .unwrap_or_default()
 }
 
-#[derive(Deserialize, Validate)]
+#[derive(Deserialize, Validate, ToSchema)]
 struct LoginBody {
     email: Email,
     password: String,
 }
 
-#[derive(Deserialize, Validate)]
+#[derive(Deserialize, Validate, ToSchema)]
 struct CodeBody {
     code: String,
 }
 
-#[derive(Deserialize, Validate)]
+#[derive(Deserialize, Validate, ToSchema)]
 struct PasswordBody {
     password: String,
 }
 
-#[derive(Deserialize, Validate)]
+#[derive(Deserialize, Validate, ToSchema)]
 struct PasswordChange {
     current_password: String,
     new_password: String,
 }
 
 /// What a login answers: signed in, or waiting for a code
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(tag = "step", rename_all = "snake_case")]
 enum LoginStep {
     SignedIn { account: AccountRecord },
     SecondFactor,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct Me {
     #[serde(flatten)]
     account: Profile,
     memberships: Vec<MemberOf>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct RecoveryCodes {
     recovery_codes: Vec<String>,
 }
 
+/// Log in
+///
+/// Checks an email and its password. With an authenticator app bound, the answer is `second_factor` and the login waits for a code
+#[utoipa::path(
+    post,
+    operation_id = "auth_login",
+    path = "/login",
+    tag = "auth",
+    security(()),
+    request_body = LoginBody,
+    responses(
+        (status = 200, body = ApiResponse<LoginStep>, description = "`signed_in` sets the session cookie, `second_factor` the cookie of the login waiting for a code"),
+        (status = 401, body = ErrorResponse, description = "wrong email or password"),
+        (status = 429, body = ErrorResponse, description = "too many failures in a row"),
+    ),
+)]
 async fn login(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -237,6 +267,21 @@ async fn login(
     Ok((jar, Json(ApiResponse { data })))
 }
 
+/// Complete a login with an authenticator code
+#[utoipa::path(
+    post,
+    operation_id = "auth_login_totp",
+    path = "/login/totp",
+    tag = "auth",
+    security(()),
+    request_body = CodeBody,
+    responses(
+        (status = 200, body = ApiResponse<LoginStep>, description = "`signed_in`, with the session cookie"),
+        (status = 401, body = ErrorResponse, description = "no login is waiting, or it expired"),
+        (status = 422, body = ErrorResponse, description = "wrong code"),
+        (status = 429, body = ErrorResponse, description = "too many failures in a row"),
+    ),
+)]
 async fn login_with_totp(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -256,6 +301,23 @@ async fn login_with_totp(
     ))
 }
 
+/// Complete a login with a recovery code
+///
+/// The code stops working once used
+#[utoipa::path(
+    post,
+    operation_id = "auth_login_recovery_code",
+    path = "/login/recovery-code",
+    tag = "auth",
+    security(()),
+    request_body = CodeBody,
+    responses(
+        (status = 200, body = ApiResponse<LoginStep>, description = "`signed_in`, with the session cookie"),
+        (status = 401, body = ErrorResponse, description = "no login is waiting, or it expired"),
+        (status = 422, body = ErrorResponse, description = "wrong code"),
+        (status = 429, body = ErrorResponse, description = "too many failures in a row"),
+    ),
+)]
 async fn login_with_recovery_code(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -288,6 +350,15 @@ fn signed_in_with_two_factors(
     (jar, Json(ApiResponse { data }))
 }
 
+/// Log out
+#[utoipa::path(
+    post,
+    operation_id = "auth_logout",
+    path = "/logout",
+    tag = "auth",
+    security(()),
+    responses((status = 204)),
+)]
 async fn logout(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -303,6 +374,16 @@ async fn logout(
     ))
 }
 
+/// Get the signed-in account
+///
+/// With the tenants it can enter and its roles in each
+#[utoipa::path(
+    get,
+    operation_id = "auth_me",
+    path = "/me",
+    tag = "auth",
+    responses((status = 200, body = ApiResponse<Me>)),
+)]
 async fn me(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -322,6 +403,22 @@ async fn me(
     }))
 }
 
+/// Change the password
+///
+/// Ends the account's other sessions
+#[utoipa::path(
+    post,
+    operation_id = "auth_change_password",
+    path = "/password",
+    tag = "auth",
+    request_body = PasswordChange,
+    responses(
+        (status = 204),
+        (status = 400, body = ErrorResponse, description = "the new password is too short or too long"),
+        (status = 422, body = ErrorResponse, description = "wrong current password"),
+        (status = 429, body = ErrorResponse, description = "too many failures in a row"),
+    ),
+)]
 async fn change_password(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -345,6 +442,14 @@ async fn change_password(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// List the sessions
+#[utoipa::path(
+    get,
+    operation_id = "auth_sessions_list",
+    path = "/sessions",
+    tag = "auth",
+    responses((status = 200, body = ApiResponse<Vec<SessionRecord>>)),
+)]
 async fn sessions(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -356,6 +461,15 @@ async fn sessions(
     Ok(Json(ApiResponse { data }))
 }
 
+/// End a session
+#[utoipa::path(
+    delete,
+    operation_id = "auth_sessions_end",
+    path = "/sessions/{id}",
+    tag = "auth",
+    params(("id" = String, Path, description = "The session's id, from the list")),
+    responses((status = 204), (status = 404, body = ErrorResponse)),
+)]
 async fn end_session(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -372,6 +486,14 @@ async fn end_session(
     }
 }
 
+/// End the other sessions
+#[utoipa::path(
+    delete,
+    operation_id = "auth_sessions_end_others",
+    path = "/sessions",
+    tag = "auth",
+    responses((status = 204)),
+)]
 async fn end_other_sessions(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -384,6 +506,21 @@ async fn end_other_sessions(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Start binding an authenticator app
+///
+/// Answers the app's secret, which starts working once a code from the app confirms it
+#[utoipa::path(
+    post,
+    operation_id = "auth_totp_setup",
+    path = "/totp/setup",
+    tag = "auth",
+    request_body = PasswordBody,
+    responses(
+        (status = 200, body = ApiResponse<TotpSetup>),
+        (status = 409, body = ErrorResponse, description = "an app is already bound"),
+        (status = 422, body = ErrorResponse, description = "wrong password"),
+    ),
+)]
 async fn set_up_totp(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -407,6 +544,21 @@ async fn set_up_totp(
     Ok(Json(ApiResponse { data }))
 }
 
+/// Confirm the authenticator app
+///
+/// Answers the recovery codes, shown only this once
+#[utoipa::path(
+    post,
+    operation_id = "auth_totp_confirm",
+    path = "/totp/confirm",
+    tag = "auth",
+    request_body = CodeBody,
+    responses(
+        (status = 200, body = ApiResponse<RecoveryCodes>),
+        (status = 409, body = ErrorResponse, description = "no setup is waiting"),
+        (status = 422, body = ErrorResponse, description = "wrong code"),
+    ),
+)]
 async fn confirm_totp(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -433,6 +585,22 @@ async fn confirm_totp(
     }))
 }
 
+/// Unbind the authenticator app
+///
+/// Only from a session that proved the app
+#[utoipa::path(
+    post,
+    operation_id = "auth_totp_disable",
+    path = "/totp/disable",
+    tag = "auth",
+    request_body = PasswordBody,
+    responses(
+        (status = 204),
+        (status = 403, body = ErrorResponse, description = "`mfa_required`: the session did not prove the app"),
+        (status = 409, body = ErrorResponse, description = "a tenant of the account requires it"),
+        (status = 422, body = ErrorResponse, description = "wrong password"),
+    ),
+)]
 async fn disable_totp(
     State(db): State<Db>,
     State(name): State<MasterName>,
@@ -548,7 +716,8 @@ mod tests {
     use axum::body::Body;
     use axum::extract::ConnectInfo;
     use axum::http::Request;
-    use axum::middleware;
+    use axum::routing::get;
+    use axum::{Router, middleware};
     use axum_client_ip::ClientIpSource;
     use resysto_model::{Member, MemberId};
     use surrealdb::types::SurrealValue;

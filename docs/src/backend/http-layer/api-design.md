@@ -143,61 +143,52 @@ A filter is applied while the range scan reads rows, until `$limit` of them pass
 
 ## OpenAPI documentation
 
-API docs written by hand are accurate the day someone writes them and slowly drift out of date after that. We generate the documentation directly from the code. The `utoipa` crate produces OpenAPI specifications from Rust types and handler annotations. Since the docs come from the actual code, they can't go stale.
+API docs written by hand are accurate the day someone writes them and slowly drift out of date after that. Ours come from the code: `utoipa` builds an OpenAPI 3.1 document from the handlers' annotations and the types they take and answer. The same document is the contract with the SPA, whose TypeScript types `openapi-typescript` generates from it, so a Rust change that breaks the UI shows up in the UI's type check.
 
-The same spec is the contract with the UI: `openapi-typescript` generates the Svelte client's types from it, so a change to a Rust type that breaks the UI shows up in the UI's type check.
+The document covers the REST API: `/api/v1` and `/t/{slug}/api/v1`. The OAuth endpoints and `/mcp` follow their own specifications and stay out of it.
+
+### Annotating a handler
+
+A bounded context's router is a `utoipa_axum` `OpenApiRouter`, and `routes!` mounts each handler at the path its annotation gives:
 
 ```rust
-use utoipa::{OpenApi, ToSchema};
-
-#[derive(Serialize, ToSchema)]
-pub struct UserResponse {
-    pub id: Uuid,
-    pub name: String,
-    pub email: String,
-    pub created_at: DateTime<Utc>,
+pub fn router<S>() -> OpenApiRouter<S> {
+    OpenApiRouter::new()
+        .routes(routes!(list, create))
+        .routes(routes!(read, update, delete))
 }
 
+/// Changes a person as a JSON Merge Patch
 #[utoipa::path(
-    post,
-    path = "/api/v1/users",
-    request_body = CreateUserDto,
+    patch,
+    path = "/{id}",
+    tag = "people",
+    params(ById, IfMatch),
+    request_body = PersonPatch,
     responses(
-        (status = 201, description = "User created successfully", body = UserResponse),
-        (status = 400, description = "Validation error", body = ErrorResponse),
-        (status = 409, description = "User with this email already exists", body = ErrorResponse),
+        (status = 200, body = ApiResponse<PersonRecord>, headers(("ETag" = String))),
+        (status = 400, body = ErrorResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 412, body = ErrorResponse, description = "the person changed since its read"),
+        (status = 428, body = ErrorResponse, description = "If-Match is missing"),
     ),
-    tag = "users"
 )]
-async fn create_user(
-    State(state): State<AppState>,
-    ValidatedJson(payload): ValidatedJson<CreateUserDto>,
-) -> AppResult<(StatusCode, Json<UserResponse>)> {
-    // ...
-}
+async fn update(/* ... */) -> AppResult<Tagged<PersonRecord>> { /* ... */ }
 ```
 
-To serve the Swagger UI alongside the API:
+- **Inputs and answers** derive `ToSchema`; path and query structs derive `IntoParams`. Their doc comments become the descriptions.
+- **Errors**: list the statuses the handler itself can answer, each with `ErrorResponse`, the type `AppError` answers with, so the document and the answers can't differ.
+- **What every route shares** is added by the server in `docs.rs`, not repeated on each handler: the session cookie and its `401`, and on tenant routes the `slug` parameter and the `403` and `404` of a refused or unknown tenant. A route open without a session says so with `security(())`, as the login does.
+- **Ids** are uuid strings with `x-entity: "<table>"`, from which the SPA makes a branded type that can't be mixed up with another entity's id. Write an id field with its alias (`PersonId`), not as `Id<Person>`.
+- **A record** is `PersonRecord`, the server-written fields next to the entity's data, named after the data type.
 
-```rust
-use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
+### The document in the repository
 
-#[derive(OpenApi)]
-#[openapi(
-    paths(create_user, get_user, list_users, update_user, delete_user),
-    components(schemas(UserResponse, CreateUserDto, UpdateUserDto, ErrorResponse)),
-    tags((name = "users", description = "User management endpoints"))
-)]
-struct ApiDoc;
+The whole document lives in `resysto/openapi.json`, the name the OpenAPI specification recommends, as plain JSON that any tool reads. A test in `crates/server/src/docs.rs` compares it with the one the handlers make, and fails at the first line that differs: a changed handler or type fails `cargo nextest run` until the file follows. Read the change first, since it is the change of contract the SPA is about to see, then run the test again with `UPDATE_OPENAPI=1`, which rewrites the file, and commit it with the code. The SPA's types are generated from this file, not from a running server.
 
-let app = Router::new()
-    .merge(api_routes())
-    .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-    .with_state(state);
-```
+### The reference page
 
-Developers can browse the API documentation at `/swagger-ui` and try out requests directly from the browser. The specification is generated from the actual types and handlers, so it can't fall out of sync with the implementation.
+`/api/openapi.json` serves the document and `/api/docs` shows it with Scalar, both to signed-in accounts only. The page loads Scalar from jsDelivr pinned to one version with its SRI hash, and turns off everything that would talk to Scalar's own services (its proxy, telemetry, AI agent and fonts). Its Content Security Policy lets it connect only to this server, so a setting Scalar ignored still couldn't send a request elsewhere. A new version of Scalar means a new pin and a new hash in `docs.rs`.
 
 ## Health check endpoints
 

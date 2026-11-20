@@ -4,9 +4,10 @@ use resysto_model::input::{nullable, present, trimmed};
 use resysto_model::{Email, OrganizationId, Record};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
+use utoipa::ToSchema;
 use validator::{Validate, ValidationError};
 
-#[derive(Debug, Clone, PartialEq, Serialize, SurrealValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, SurrealValue, ToSchema)]
 pub struct Person {
     pub first_name: String,
     pub last_name: String,
@@ -19,7 +20,7 @@ pub struct Person {
 
 pub type PersonRecord = Record<resysto_model::Person, Person>;
 
-#[derive(Debug, Clone, Default, Deserialize, Validate)]
+#[derive(Debug, Clone, Default, Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewPerson {
     #[validate(custom(function = "person_name"))]
@@ -47,13 +48,15 @@ pub struct NewPerson {
 }
 
 /// The body of a JSON Merge Patch: an absent field stays, `null` clears it
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Validate)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PersonPatch {
     #[serde(default, deserialize_with = "present")]
+    #[schema(nullable = false)]
     #[validate(custom(function = "person_name"))]
     pub first_name: Option<String>,
     #[serde(default, deserialize_with = "present")]
+    #[schema(nullable = false)]
     #[validate(custom(function = "person_name"))]
     pub last_name: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
@@ -77,6 +80,7 @@ pub struct PersonPatch {
     )]
     pub department: Option<Option<String>>,
     #[serde(default, deserialize_with = "present")]
+    #[schema(nullable = false)]
     #[validate(length(min = 1, message = "at least one organization"))]
     pub organization_ids: Option<Vec<OrganizationId>>,
 }

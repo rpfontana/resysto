@@ -12,6 +12,7 @@ sha2.workspace = true
 surrealdb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+utoipa.workspace = true
 uuid.workspace = true
 
 [features]

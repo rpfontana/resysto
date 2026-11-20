@@ -1,12 +1,15 @@
 //! The HTTP application
 
 mod config;
+mod docs;
 mod mcp;
 mod routes;
 mod scope;
 mod shutdown;
 mod site;
 mod state;
+#[cfg(test)]
+mod testing;
 
 use std::net::SocketAddr;
 
