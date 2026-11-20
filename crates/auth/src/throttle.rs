@@ -5,6 +5,8 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::SurrealValue;
 
+use super::account::AccountId;
+use super::audit::{self, About, Event};
 use super::error::AuthError;
 use super::token::key;
 
@@ -27,6 +29,17 @@ struct LoginLock {
 /// Forgets the failed logins of `email`, blocked or not
 pub async fn unlock(master: &Surreal<Any>, email: &Email) -> Result<(), AuthError> {
     clear_failures(master, &key(email.as_str())).await?;
+    let account: Option<AccountId> = master
+        .query("SELECT VALUE id FROM account WHERE email = $email LIMIT 1")
+        .bind(("email", email.clone()))
+        .await?
+        .check()?
+        .take(0)?;
+    let about = About {
+        account,
+        ..About::default()
+    };
+    audit::record(master, Event::Unlocked, about).await?;
     tracing::info!("login unlocked");
     Ok(())
 }
@@ -105,6 +118,7 @@ fn wait_after(failures: i64) -> Duration {
 mod tests {
     use super::*;
     use crate::account::create_account;
+    use crate::audit::Client;
     use crate::login::login;
     use crate::testing::{PASSWORD, ada, master, passwords, run};
 
@@ -112,7 +126,7 @@ mod tests {
     async fn failed_logins_make_an_email_wait_and_a_hundred_block_it_until_unlocked() {
         let master = master().await;
         let passwords = passwords();
-        create_account(&master, &passwords, ada(), PASSWORD.into(), None, &[])
+        create_account(&master, &passwords, ada(), PASSWORD.into())
             .await
             .unwrap();
         let nobody: Email = "nobody@acme.it".parse().unwrap();
@@ -121,14 +135,28 @@ mod tests {
         // an email no account has gets the same answers, so a wait tells nothing about accounts
         for email in [ada(), nobody] {
             for attempt in 1..=5 {
-                let refused = login(&master, &passwords, email.clone(), wrong.into(), None).await;
+                let refused = login(
+                    &master,
+                    &passwords,
+                    email.clone(),
+                    wrong.into(),
+                    &Client::default(),
+                )
+                .await;
                 assert!(
                     matches!(refused, Err(AuthError::InvalidCredentials)),
                     "{email} attempt {attempt}: {:?}",
                     refused.err()
                 );
             }
-            let waiting = login(&master, &passwords, email.clone(), PASSWORD.into(), None).await;
+            let waiting = login(
+                &master,
+                &passwords,
+                email.clone(),
+                PASSWORD.into(),
+                &Client::default(),
+            )
+            .await;
             assert!(
                 matches!(
                     waiting,
@@ -144,13 +172,20 @@ mod tests {
         let failures =
             "UPDATE type::record('login_attempt', $key) SET failures = 99, locked_until = NONE";
         run(&master, failures, &key(ada().as_str())).await;
-        let refused = login(&master, &passwords, ada(), wrong.into(), None).await;
+        let refused = login(&master, &passwords, ada(), wrong.into(), &Client::default()).await;
         assert!(
             matches!(refused, Err(AuthError::InvalidCredentials)),
             "{:?}",
             refused.err()
         );
-        let blocked = login(&master, &passwords, ada(), PASSWORD.into(), None).await;
+        let blocked = login(
+            &master,
+            &passwords,
+            ada(),
+            PASSWORD.into(),
+            &Client::default(),
+        )
+        .await;
         assert!(
             matches!(blocked, Err(AuthError::LoginBlocked)),
             "{:?}",
@@ -159,9 +194,15 @@ mod tests {
 
         unlock(&master, &ada()).await.unwrap();
         assert!(
-            login(&master, &passwords, ada(), PASSWORD.into(), None)
-                .await
-                .is_ok()
+            login(
+                &master,
+                &passwords,
+                ada(),
+                PASSWORD.into(),
+                &Client::default()
+            )
+            .await
+            .is_ok()
         );
     }
 }

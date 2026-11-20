@@ -1,13 +1,15 @@
-use resysto_model::OrganizationId;
+use resysto_model::{Email, Member, OrganizationId};
+use resysto_surrealdb::{Db, transaction};
 use serde::Serialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb::types::SurrealValue;
+use surrealdb::types::{RecordId, SurrealValue};
 
 use super::account::AccountId;
+use super::audit::{self, About, Event};
 use super::error::AuthError;
 use super::mfa::MfaRequiredFor;
-use crate::policy::ADMIN;
+use crate::policy::{ADMIN, ROLES};
 
 /// A ready tenant an account is a member of
 #[derive(Debug, SurrealValue)]
@@ -94,20 +96,134 @@ pub(crate) async fn memberships(
         .collect())
 }
 
+#[derive(SurrealValue)]
+struct Tenant {
+    id: RecordId,
+    db_name: String,
+}
+
+/// Makes the account a member of the tenant `slug` names, with `roles`; the member's row in the
+/// tenant's database goes first, so a failure never leaves a membership whose author the tenant
+/// can't name
+pub async fn add_member(
+    db: &Db,
+    master: &Surreal<Any>,
+    account: AccountId,
+    slug: &str,
+    roles: &[String],
+) -> Result<(), AuthError> {
+    if let Some(unknown) = roles.iter().find(|role| !ROLES.contains(&role.as_str())) {
+        return Err(AuthError::UnknownRole(unknown.clone()));
+    }
+    let tenant: Option<Tenant> = master
+        .query("SELECT id, db_name FROM tenant WHERE slug = $slug LIMIT 1")
+        .bind(("slug", slug.to_owned()))
+        .await?
+        .check()?
+        .take(0)?;
+    let tenant = tenant.ok_or_else(|| AuthError::UnknownTenant(slug.to_owned()))?;
+    let email: Option<Email> = master
+        .query("SELECT VALUE email FROM ONLY $account")
+        .bind(("account", account))
+        .await?
+        .check()?
+        .take(0)?;
+    let email = email.ok_or_else(|| AuthError::UnknownAccount(account.to_string()))?;
+    db.system_session(&tenant.db_name)
+        .await?
+        .query("UPSERT $member SET email = $email RETURN NONE")
+        .bind(("member", account.cast::<Member>()))
+        .bind(("email", email))
+        .await?
+        .check()?;
+    transaction(master, |tx| {
+        let (tenant, roles) = (tenant.id.clone(), roles.to_vec());
+        async move {
+            let about = About {
+                tenant: Some(tenant.clone()),
+                ..About::of(account)
+            };
+            tx.query("RELATE $account->member_of->$tenant SET roles = $roles RETURN NONE")
+                .bind(("account", account))
+                .bind(("tenant", tenant))
+                .bind(("roles", roles))
+                .await?
+                .check()?;
+            audit::record(&tx, Event::MemberAdded, about).await?;
+            Ok(())
+        }
+    })
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::account::create_account;
     use crate::session::authenticate;
-    use crate::testing::{PASSWORD, ada, master, passwords, session_token, sign_in};
+    use crate::testing::{
+        PASSWORD, ada, new_master, new_tenant, passwords, server, session_token, sign_in,
+    };
+
+    #[tokio::test]
+    async fn a_new_member_is_named_in_its_tenant_and_recorded_in_the_master() {
+        let server = server().await;
+        let (_, master) = new_master(&server).await;
+        let one = new_tenant(&server, &master, "one").await;
+        let account = create_account(&master, &passwords(), ada(), PASSWORD.into())
+            .await
+            .unwrap();
+        let reader = vec!["tenant/reader".to_owned()];
+
+        let owner = vec!["tenant/owner".to_owned()];
+        let unknown_role = add_member(&server, &master, account, "one", &owner).await;
+        assert!(
+            matches!(unknown_role, Err(AuthError::UnknownRole(_))),
+            "{:?}",
+            unknown_role.err()
+        );
+        let unknown_tenant = add_member(&server, &master, account, "nobody", &reader).await;
+        assert!(
+            matches!(unknown_tenant, Err(AuthError::UnknownTenant(_))),
+            "{:?}",
+            unknown_tenant.err()
+        );
+        add_member(&server, &master, account, "one", &reader)
+            .await
+            .unwrap();
+
+        let email: Option<Email> = server
+            .system_session(&one)
+            .await
+            .unwrap()
+            .query("SELECT VALUE email FROM ONLY $member")
+            .bind(("member", account.cast::<Member>()))
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(email, Some(ada()));
+        let reachable = memberships(&master, account).await.unwrap();
+        let roles: Vec<&[String]> = reachable.iter().map(|member| &member.roles[..]).collect();
+        assert_eq!(roles, [&reader[..]]);
+        let added: Vec<String> = master
+            .query("SELECT VALUE event FROM audit_event WHERE tenant != NONE")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(added, ["member_added"]);
+    }
 
     #[tokio::test]
     async fn a_session_reaches_only_the_ready_tenants_of_its_account() {
-        let master = master().await;
+        let server = server().await;
+        let (_, master) = new_master(&server).await;
+        let one = new_tenant(&server, &master, "one").await;
         master
             .query(
-                "CREATE tenant SET slug = 'one', db_name = 't_one', state = 'ready';
-                 CREATE tenant SET slug = 'two', db_name = 't_two', state = 'suspended';
+                "CREATE tenant SET slug = 'two', db_name = 't_two', state = 'suspended';
                  CREATE tenant SET slug = 'three', db_name = 't_three', state = 'ready';",
             )
             .await
@@ -115,16 +231,12 @@ mod tests {
             .check()
             .unwrap();
         let admin = vec!["tenant/admin".to_owned()];
-        let account = create_account(
-            &master,
-            &passwords(),
-            ada(),
-            PASSWORD.into(),
-            Some("one"),
-            &admin,
-        )
-        .await
-        .unwrap();
+        let account = create_account(&master, &passwords(), ada(), PASSWORD.into())
+            .await
+            .unwrap();
+        add_member(&server, &master, account, "one", &admin)
+            .await
+            .unwrap();
         let branch = OrganizationId::new();
         master
             .query(
@@ -147,7 +259,7 @@ mod tests {
             .unwrap()
             .account;
         let cases = [
-            ("one", Some("t_one")),
+            ("one", Some(one.as_str())),
             ("two", None),
             ("three", None),
             ("nobody", None),

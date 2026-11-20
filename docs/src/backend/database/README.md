@@ -12,3 +12,4 @@ Our databases run at compatibility level 4, the level of every database created 
 - **Manifests**: the changes a definition can't express, such as copying values from one field to another.
 - **Changing Fields**: the field changes the server refuses on a table with rows, and the manifest each one needs.
 - **Deploying**: checking a change against production with `resysto-migrator plan`, and reading what `up` prints.
+- **Audit**: the fields and the event every table carries, so each change records who made it and how.

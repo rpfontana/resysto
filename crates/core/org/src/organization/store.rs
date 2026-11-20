@@ -213,13 +213,25 @@ pub(super) async fn reassign(
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::{Db, Grant};
+    use resysto_model::MemberId;
+    use resysto_surrealdb::{Actor, Db, Grant, Via};
     use surrealdb::Surreal;
     use surrealdb::engine::any::Any;
     use surrealdb::types::{RecordId, Uuid, Value};
 
     use super::super::model::Industry;
     use super::*;
+
+    fn in_ui(member: RecordId) -> Actor {
+        Actor {
+            member,
+            via: Via::Ui,
+            session: None,
+            request: None,
+            ip: None,
+            user_agent: None,
+        }
+    }
 
     // a tenant plus a table that tags its rows like every bounded context does
     async fn tenant() -> Surreal<Any> {
@@ -273,6 +285,42 @@ mod tests {
             .take(0)
             .unwrap();
         tags.into_iter().next().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_write_records_who_made_it_and_the_change() {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, "t_acme")
+            .await
+            .unwrap();
+        let member = MemberId::new();
+        let everything = Grant {
+            organizations: None,
+            write: true,
+        };
+        let session = db
+            .record_session("t_acme", &in_ui(member.into()), &everything)
+            .await
+            .unwrap();
+
+        let id = organization(&session).await;
+
+        let stored = find(&session, id).await.unwrap().unwrap();
+        assert_eq!(
+            (stored.created_by, stored.updated_by),
+            (Some(member), Some(member))
+        );
+        let by: Vec<Option<MemberId>> = db
+            .system_session("t_acme")
+            .await
+            .unwrap()
+            .query("SELECT VALUE by FROM audit_change WHERE record = $id AND event = 'CREATE'")
+            .bind(("id", id))
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(by, [Some(member)]);
     }
 
     #[tokio::test]
@@ -331,8 +379,11 @@ mod tests {
             organizations: Some(Vec::new()),
             write: false,
         };
-        let user = RecordId::new("account", Uuid::new_v7());
-        let session = db.record_session("t_acme", user, &scoped).await.unwrap();
+        let user = RecordId::new("member", Uuid::new_v7());
+        let session = db
+            .record_session("t_acme", &in_ui(user), &scoped)
+            .await
+            .unwrap();
 
         let plan: Value = session
             .query(format!("{LIST} EXPLAIN"))

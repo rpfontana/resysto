@@ -5,12 +5,23 @@ use axum::http::{Method, Request, StatusCode, header};
 use resysto_http::TenantAccess;
 use resysto_model::OrganizationId;
 use resysto_people::person;
-use resysto_surrealdb::{Db, Grant};
+use resysto_surrealdb::{Actor, Db, Grant, Via};
 use serde_json::{Value, json};
 use surrealdb::types::{RecordId, Uuid};
 use tower::ServiceExt;
 
 const TENANT: &str = "t_acme";
+
+fn in_ui(member: RecordId) -> Actor {
+    Actor {
+        member,
+        via: Via::Ui,
+        session: None,
+        request: None,
+        ip: None,
+        user_agent: None,
+    }
+}
 
 async fn tenant() -> Db {
     let db = Db::memory().await.unwrap();
@@ -64,7 +75,7 @@ async fn send(
 ) -> (StatusCode, Option<String>, Value) {
     let access = TenantAccess {
         database: TENANT.into(),
-        account: RecordId::new("account", Uuid::new_v7()),
+        actor: in_ui(RecordId::new("member", Uuid::new_v7())),
         grant: grant.clone(),
     };
     let mut request = Request::builder()

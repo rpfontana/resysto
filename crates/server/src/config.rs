@@ -1,3 +1,4 @@
+use axum_client_ip::ClientIpSource;
 use secrecy::SecretString;
 use serde::Deserialize;
 
@@ -5,6 +6,9 @@ use serde::Deserialize;
 pub(crate) struct Config {
     pub(crate) addr: String,
     pub(crate) site: String,
+    /// Where the address of a request comes from: `ConnectInfo` without a proxy in front,
+    /// the header the proxy sets behind one, such as `RightmostXForwardedFor`
+    pub(crate) client_ip_source: ClientIpSource,
     pub(crate) db: Db,
     pub(crate) auth: Auth,
 }

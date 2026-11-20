@@ -7,6 +7,8 @@ mod shutdown;
 mod site;
 mod state;
 
+use std::net::SocketAddr;
+
 use resysto_surrealdb::MASTER_DB;
 use tokio::net::TcpListener;
 
@@ -17,6 +19,7 @@ pub async fn serve() -> anyhow::Result<()> {
     let Config {
         addr,
         site,
+        client_ip_source,
         db,
         auth,
     } = resysto_config::load()?;
@@ -32,8 +35,12 @@ pub async fn serve() -> anyhow::Result<()> {
 
     tracing::info!("listening on http://{addr}");
 
-    axum::serve(listener, routes::router(state, &site))
-        .with_graceful_shutdown(shutdown::requested())
-        .await?;
+    let app = routes::router(state, &site, client_ip_source);
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown::requested())
+    .await?;
     Ok(())
 }

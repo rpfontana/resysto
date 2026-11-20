@@ -23,6 +23,11 @@ permit (
     resource
 );
 
+// the audit shows every record of the tenant, before and after each change
+@id("audit/whole-tenant-admins")
+forbid (principal, action, resource == Resysto::Resource::"audit")
+unless { principal in Resysto::Role::"tenant/admin" && principal.whole_tenant };
+
 @id("organizations/whole-tenant")
 forbid (
     principal,

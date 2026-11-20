@@ -7,6 +7,7 @@ use surrealdb::types::{Bytes, RecordId, SurrealValue};
 use tokio::task;
 
 use super::account::{AccountId, AccountRecord, Credentials};
+use super::audit::{self, About, Client, Event};
 use super::error::AuthError;
 use super::session::{self, Factors};
 use super::throttle::{clear_failures, count_failure, ensure_not_locked};
@@ -39,7 +40,7 @@ pub(crate) async fn login(
     passwords: &Passwords,
     email: Email,
     password: String,
-    user_agent: Option<String>,
+    client: &Client,
 ) -> Result<Login, AuthError> {
     let attempts = key(email.as_str());
     ensure_not_locked(master, &attempts).await?;
@@ -69,6 +70,12 @@ pub(crate) async fn login(
     let known = account.as_ref().map(|account| account.id);
     let Some(account) = account.filter(|_| matches) else {
         let failures = count_failure(master, &attempts).await?;
+        let about = About {
+            account: known,
+            ..About::default()
+        }
+        .with_client(client);
+        audit::record(master, Event::LoginFailed, about).await?;
         tracing::warn!(account = ?known, failures, "login failed");
         return Err(AuthError::InvalidCredentials);
     };
@@ -82,14 +89,23 @@ pub(crate) async fn login(
             )
             .bind(("key", challenge.key()))
             .bind(("account", account.id))
-            .bind(("user_agent", user_agent))
+            .bind(("user_agent", client.user_agent.clone()))
             .bind(("wait", CHALLENGE))
             .await?
             .check()?;
         tracing::info!(account = %account.id, "password accepted, waiting for a second factor");
         return Ok(Login::SecondFactor(challenge));
     }
+    let user_agent = client.user_agent.clone();
     let token = open_session(master, &attempts, account.id, user_agent, Factors::One).await?;
+    audit::record(
+        master,
+        Event::Login,
+        About::of(account.id)
+            .in_session(token.key())
+            .with_client(client),
+    )
+    .await?;
     tracing::info!(account = %account.id, "login");
     Ok(Login::SignedIn(token, account))
 }
@@ -100,6 +116,7 @@ pub(crate) async fn login_with_totp(
     cipher: &Cipher,
     challenge: &str,
     code: &str,
+    client: &Client,
 ) -> Result<(Token, AccountRecord), AuthError> {
     let (pending, attempts) = waiting(master, challenge).await?;
     let secret: Option<Bytes> = master
@@ -130,9 +147,9 @@ pub(crate) async fn login_with_totp(
         None => false,
     };
     if !accepted {
-        return Err(refuse_code(master, &attempts, pending.account).await?);
+        return Err(refuse_code(master, &attempts, pending.account, client).await?);
     }
-    complete_login(master, challenge, pending, &attempts).await
+    complete_login(master, challenge, pending, &attempts, client).await
 }
 
 /// Completes a login waiting on `challenge` with a recovery code, which then stops working
@@ -141,6 +158,7 @@ pub(crate) async fn login_with_recovery_code(
     passwords: &Passwords,
     challenge: &str,
     code: &str,
+    client: &Client,
 ) -> Result<(Token, AccountRecord), AuthError> {
     let (pending, attempts) = waiting(master, challenge).await?;
     let hashes: Option<Vec<String>> = master
@@ -174,10 +192,12 @@ pub(crate) async fn login_with_recovery_code(
         None => None,
     };
     let Some(left) = left else {
-        return Err(refuse_code(master, &attempts, pending.account).await?);
+        return Err(refuse_code(master, &attempts, pending.account, client).await?);
     };
+    let about = About::of(pending.account).with_client(client);
+    audit::record(master, Event::RecoveryCodeUsed, about).await?;
     tracing::warn!(account = %pending.account, left, "recovery code used");
-    complete_login(master, challenge, pending, &attempts).await
+    complete_login(master, challenge, pending, &attempts, client).await
 }
 
 // the challenge still open behind the cookie, and the key its email's failures are counted by
@@ -202,8 +222,11 @@ async fn refuse_code(
     master: &Surreal<Any>,
     attempts: &str,
     account: AccountId,
+    client: &Client,
 ) -> Result<AuthError, AuthError> {
     let failures = count_failure(master, attempts).await?;
+    let about = About::of(account).with_client(client);
+    audit::record(master, Event::SecondFactorRefused, about).await?;
     tracing::warn!(account = %account, failures, "second factor refused");
     Ok(AuthError::WrongCode)
 }
@@ -213,6 +236,7 @@ async fn complete_login(
     challenge: &str,
     pending: Challenge,
     attempts: &str,
+    client: &Client,
 ) -> Result<(Token, AccountRecord), AuthError> {
     master
         .query("DELETE type::record('login_challenge', $key)")
@@ -225,6 +249,14 @@ async fn complete_login(
         pending.account,
         pending.user_agent,
         Factors::Two,
+    )
+    .await?;
+    audit::record(
+        master,
+        Event::Login,
+        About::of(pending.account)
+            .in_session(token.key())
+            .with_client(client),
     )
     .await?;
     tracing::info!(account = %pending.account, "login with a second factor");
@@ -252,6 +284,7 @@ async fn open_session(
 mod tests {
     use super::*;
     use crate::account::{create_account, profile};
+    use crate::audit::Client;
     use crate::mfa::reset_totp;
     use crate::session::{Session, authenticate};
     use crate::testing::{
@@ -262,7 +295,7 @@ mod tests {
     #[tokio::test]
     async fn login_needs_the_password_of_an_active_account() {
         let master = master().await;
-        create_account(&master, &passwords(), ada(), PASSWORD.into(), None, &[])
+        create_account(&master, &passwords(), ada(), PASSWORD.into())
             .await
             .unwrap();
 
@@ -271,7 +304,14 @@ mod tests {
             ("bob@acme.it".parse().unwrap(), PASSWORD),
         ];
         for (email, password) in attempts {
-            let refused = login(&master, &passwords(), email, password.into(), None).await;
+            let refused = login(
+                &master,
+                &passwords(),
+                email,
+                password.into(),
+                &Client::default(),
+            )
+            .await;
             assert!(
                 matches!(refused, Err(AuthError::InvalidCredentials)),
                 "{password}: {:?}",
@@ -279,9 +319,15 @@ mod tests {
             );
         }
         assert!(
-            login(&master, &passwords(), ada(), PASSWORD.into(), None)
-                .await
-                .is_ok()
+            login(
+                &master,
+                &passwords(),
+                ada(),
+                PASSWORD.into(),
+                &Client::default()
+            )
+            .await
+            .is_ok()
         );
 
         master
@@ -290,7 +336,14 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
-        let refused = login(&master, &passwords(), ada(), PASSWORD.into(), None).await;
+        let refused = login(
+            &master,
+            &passwords(),
+            ada(),
+            PASSWORD.into(),
+            &Client::default(),
+        )
+        .await;
         assert!(
             matches!(refused, Err(AuthError::InvalidCredentials)),
             "{:?}",
@@ -301,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn a_code_from_the_app_completes_a_login_once() {
         let master = master().await;
-        let account = create_account(&master, &passwords(), ada(), PASSWORD.into(), None, &[])
+        let account = create_account(&master, &passwords(), ada(), PASSWORD.into())
             .await
             .unwrap();
         let first = session_token(sign_in(&master, ada()).await);
@@ -316,7 +369,8 @@ mod tests {
         let wrong = format!("{:06}", (shown + 1) % 1_000_000);
         // the code that bound the app was used already
         for refused in [wrong, code(&secret, 0)] {
-            let answer = login_with_totp(&master, &cipher(), &waiting, &refused).await;
+            let answer =
+                login_with_totp(&master, &cipher(), &waiting, &refused, &Client::default()).await;
             assert!(
                 matches!(answer, Err(AuthError::WrongCode)),
                 "{refused}: {:?}",
@@ -336,13 +390,26 @@ mod tests {
         };
         assert_eq!(failures().await, Some(2));
 
-        let (token, _) = login_with_totp(&master, &cipher(), &waiting, &code(&secret, 30))
-            .await
-            .unwrap();
+        let (token, _) = login_with_totp(
+            &master,
+            &cipher(),
+            &waiting,
+            &code(&secret, 30),
+            &Client::default(),
+        )
+        .await
+        .unwrap();
         let token = token.into_string();
         assert_eq!(authenticate(&master, &token).await.unwrap(), two_factors);
         assert_eq!(failures().await, None);
-        let spent = login_with_totp(&master, &cipher(), &waiting, &code(&secret, 30)).await;
+        let spent = login_with_totp(
+            &master,
+            &cipher(),
+            &waiting,
+            &code(&secret, 30),
+            &Client::default(),
+        )
+        .await;
         assert!(
             matches!(spent, Err(AuthError::LoginExpired)),
             "{:?}",
@@ -354,7 +421,7 @@ mod tests {
     async fn a_recovery_code_completes_one_login_and_a_reset_unbinds_the_app() {
         let master = master().await;
         let passwords = passwords();
-        let account = create_account(&master, &passwords, ada(), PASSWORD.into(), None, &[])
+        let account = create_account(&master, &passwords, ada(), PASSWORD.into())
             .await
             .unwrap();
         let first = session_token(sign_in(&master, ada()).await);
@@ -363,21 +430,24 @@ mod tests {
 
         let waiting = challenge_token(sign_in(&master, ada()).await);
         let typed = codes[0].to_uppercase().replace('-', " ");
-        let (token, _) = login_with_recovery_code(&master, &passwords, &waiting, &typed)
-            .await
-            .unwrap();
+        let (token, _) =
+            login_with_recovery_code(&master, &passwords, &waiting, &typed, &Client::default())
+                .await
+                .unwrap();
         let token = token.into_string();
         let session = authenticate(&master, &token).await.unwrap();
         assert_eq!(session, Some(Session { account, mfa: true }));
         let waiting = challenge_token(sign_in(&master, ada()).await);
-        let used = login_with_recovery_code(&master, &passwords, &waiting, &codes[0]).await;
+        let used =
+            login_with_recovery_code(&master, &passwords, &waiting, &codes[0], &Client::default())
+                .await;
         assert!(
             matches!(used, Err(AuthError::WrongCode)),
             "{:?}",
             used.err()
         );
         assert!(
-            login_with_recovery_code(&master, &passwords, &waiting, &codes[1])
+            login_with_recovery_code(&master, &passwords, &waiting, &codes[1], &Client::default())
                 .await
                 .is_ok()
         );

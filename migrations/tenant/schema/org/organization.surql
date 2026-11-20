@@ -12,6 +12,8 @@ DEFINE FIELD OVERWRITE annual_income ON organization TYPE option<int>;
 DEFINE FIELD OVERWRITE city ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE country ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at ON organization TYPE datetime DEFAULT time::now() READONLY;
+-- NONE when the system wrote, such as a migration
+DEFINE FIELD OVERWRITE created_by ON organization TYPE option<record<member>> DEFAULT $auth READONLY;
 DEFINE FIELD OVERWRITE description ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE email ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE employee_count ON organization TYPE option<int>;
@@ -30,6 +32,7 @@ DEFINE FIELD OVERWRITE path ON organization TYPE array<record<organization>>;
 DEFINE FIELD OVERWRITE phone ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE postal_code ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE updated_at ON organization TYPE datetime VALUE time::now();
+DEFINE FIELD OVERWRITE updated_by ON organization TYPE option<record<member>> VALUE $auth;
 DEFINE FIELD OVERWRITE vat_number ON organization TYPE option<string>;
 DEFINE FIELD OVERWRITE version ON organization TYPE int VALUE ($before ?? 0) + 1;
 DEFINE FIELD OVERWRITE website ON organization TYPE option<string>;
@@ -40,3 +43,22 @@ DEFINE FIELD OVERWRITE website ON organization TYPE option<string>;
 
 DEFINE INDEX OVERWRITE idx_organization ON organization FIELDS id;
 DEFINE INDEX OVERWRITE idx_organization_parent ON organization FIELDS parent;
+
+-- ------------------------------
+-- EVENTS
+-- ------------------------------
+
+DEFINE EVENT OVERWRITE audit ON organization THEN {
+    CREATE type::record('audit_change', rand::uuid::v7()) CONTENT {
+        after: $after,
+        before: $before,
+        by: $auth,
+        event: $event,
+        ip: $token.ip,
+        record: $value.id,
+        request: $token.rid,
+        session: $token.sid,
+        user_agent: $token.ua,
+        via: $token.via,
+    };
+};

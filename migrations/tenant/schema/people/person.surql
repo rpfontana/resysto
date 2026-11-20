@@ -9,6 +9,8 @@ DEFINE TABLE OVERWRITE person SCHEMAFULL PERMISSIONS
 -- ------------------------------
 
 DEFINE FIELD OVERWRITE created_at ON person TYPE datetime DEFAULT time::now() READONLY;
+-- NONE when the system wrote, such as a migration
+DEFINE FIELD OVERWRITE created_by ON person TYPE option<record<member>> DEFAULT $auth READONLY;
 DEFINE FIELD OVERWRITE department ON person TYPE option<string>;
 DEFINE FIELD OVERWRITE email ON person TYPE option<string>;
 DEFINE FIELD OVERWRITE first_name ON person TYPE string;
@@ -19,6 +21,7 @@ DEFINE FIELD OVERWRITE organization_ids ON person TYPE array<record<organization
     REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;
 DEFINE FIELD OVERWRITE phone ON person TYPE option<string>;
 DEFINE FIELD OVERWRITE updated_at ON person TYPE datetime VALUE time::now();
+DEFINE FIELD OVERWRITE updated_by ON person TYPE option<record<member>> VALUE $auth;
 DEFINE FIELD OVERWRITE version ON person TYPE int VALUE ($before ?? 0) + 1;
 
 -- ------------------------------
@@ -26,3 +29,22 @@ DEFINE FIELD OVERWRITE version ON person TYPE int VALUE ($before ?? 0) + 1;
 -- ------------------------------
 
 DEFINE INDEX OVERWRITE idx_person ON person FIELDS id;
+
+-- ------------------------------
+-- EVENTS
+-- ------------------------------
+
+DEFINE EVENT OVERWRITE audit ON person THEN {
+    CREATE type::record('audit_change', rand::uuid::v7()) CONTENT {
+        after: $after,
+        before: $before,
+        by: $auth,
+        event: $event,
+        ip: $token.ip,
+        record: $value.id,
+        request: $token.rid,
+        session: $token.sid,
+        user_agent: $token.ua,
+        via: $token.via,
+    };
+};

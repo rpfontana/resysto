@@ -1,11 +1,10 @@
 use axum::extract::{FromRef, FromRequest, FromRequestParts, Request};
 use axum::http::header;
 use axum::http::request::Parts;
-use resysto_surrealdb::{Db, Grant};
+use resysto_surrealdb::{Actor, Db, Grant};
 use serde::de::DeserializeOwned;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb::types::RecordId;
 use validator::Validate;
 
 use crate::AppError;
@@ -72,12 +71,12 @@ impl<S: Send + Sync> FromRequestParts<S> for IfMatch {
     }
 }
 
-/// Where an authenticated and authorized request may go in its tenant, which the server's
-/// middleware puts in the request extensions
+/// Where an authenticated and authorized request may go in its tenant, and who it writes as,
+/// which the server's middleware puts in the request extensions
 #[derive(Debug, Clone)]
 pub struct TenantAccess {
     pub database: String,
-    pub account: RecordId,
+    pub actor: Actor,
     pub grant: Grant,
 }
 
@@ -97,7 +96,7 @@ where
             .get::<TenantAccess>()
             .ok_or(AppError::Unauthorized)?;
         let db = Db::from_ref(state)
-            .record_session(&access.database, access.account.clone(), &access.grant)
+            .record_session(&access.database, &access.actor, &access.grant)
             .await
             .map_err(|error| AppError::Internal(error.into()))?;
         Ok(Self(db))

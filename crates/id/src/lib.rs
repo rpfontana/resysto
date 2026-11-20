@@ -41,6 +41,15 @@ impl<T> Id<T> {
         }
     }
 
+    /// The id with the same key in `U`'s table, for a record that mirrors this one
+    #[must_use]
+    pub fn cast<U>(self) -> Id<U> {
+        Id {
+            key: self.key,
+            kind: PhantomData,
+        }
+    }
+
     fn from_key(key: Uuid) -> Result<Self, ParseIdError> {
         if key.get_version_num() == 7 {
             Ok(Self {

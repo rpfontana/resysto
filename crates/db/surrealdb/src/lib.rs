@@ -10,6 +10,7 @@ pub use page::{Cursor, Page, PageRequest, page, write_in_batches};
 pub use schema::{SchemaFile, apply_schema, changed_schema, dry_run_schema};
 pub use transaction::{Executor, Tx, transaction};
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +20,7 @@ use serde::Serialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::{self, Any};
 use surrealdb::opt::auth::Namespace;
-use surrealdb::types::{RecordId, ToSql};
+use surrealdb::types::{RecordId, SurrealValue, ToSql};
 use tokio::sync::RwLock;
 
 /// The database of the master lane, which registers the tenants
@@ -77,6 +78,31 @@ pub struct Grant {
     pub write: bool,
 }
 
+/// Who a record session writes as; the audit fields and events read it from the token
+#[derive(Debug, Clone, PartialEq)]
+pub struct Actor {
+    /// The member the session runs as, which `$auth` holds
+    pub member: RecordId,
+    pub via: Via,
+    /// The key of the browser session the request came with
+    pub session: Option<String>,
+    /// The request's `x-request-id`, shared by every change it makes
+    pub request: Option<String>,
+    /// The address the request came from
+    pub ip: Option<IpAddr>,
+    /// The browser's `User-Agent`
+    pub user_agent: Option<String>,
+}
+
+/// The channel a write came through
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, SurrealValue)]
+#[serde(rename_all = "lowercase")]
+#[surreal(untagged, rename_all = "lowercase")]
+pub enum Via {
+    /// The SPA, with a browser session
+    Ui,
+}
+
 /// Errors returned by [`Db`]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -118,6 +144,15 @@ struct Claims<'a> {
     org_all: bool,
     org_scope: Vec<String>,
     write: bool,
+    via: Via,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sid: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rid: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ip: Option<IpAddr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ua: Option<&'a str>,
 }
 
 impl Db {
@@ -198,25 +233,20 @@ impl Db {
         &self.0.verifying_key
     }
 
-    /// A new record session on `database` as `user`, through the database's `app` access
+    /// A new record session on `database` as `actor`, through the database's `app` access
     pub async fn record_session(
         &self,
         database: &str,
-        user: impl Into<RecordId>,
+        actor: &Actor,
         grant: &Grant,
     ) -> Result<Surreal<Any>, Error> {
-        let token = self.record_token(database, &user.into(), grant)?;
+        let token = self.record_token(database, actor, grant)?;
         let session = self.0.bare.clone();
         session.authenticate(token).await?;
         Ok(session)
     }
 
-    fn record_token(
-        &self,
-        database: &str,
-        user: &RecordId,
-        grant: &Grant,
-    ) -> Result<String, Error> {
+    fn record_token(&self, database: &str, actor: &Actor, grant: &Grant) -> Result<String, Error> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -224,7 +254,7 @@ impl Db {
             ns: &self.0.namespace,
             db: database,
             ac: ACCESS,
-            id: user.to_sql(),
+            id: actor.member.to_sql(),
             iat: now,
             exp: now + TOKEN_TTL_SECS,
             org_all: grant.organizations.is_none(),
@@ -235,6 +265,11 @@ impl Db {
                 .map(ToSql::to_sql)
                 .collect(),
             write: grant.write,
+            via: actor.via,
+            sid: actor.session.as_deref(),
+            rid: actor.request.as_deref(),
+            ip: actor.ip,
+            ua: actor.user_agent.as_deref(),
         };
         Ok(jsonwebtoken::encode(
             &Header::new(Algorithm::ES256),
@@ -353,6 +388,17 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         }
     }
 
+    fn in_ui(member: RecordId) -> Actor {
+        Actor {
+            member,
+            via: Via::Ui,
+            session: None,
+            request: None,
+            ip: None,
+            user_agent: None,
+        }
+    }
+
     async fn whoami(session: &Surreal<Any>) -> (Option<RecordId>, Option<String>) {
         let mut response = session
             .query("RETURN $auth; RETURN session::db();")
@@ -365,15 +411,15 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
     async fn record_sessions_are_separate_and_leave_the_system_session_alone() {
         let db = connect().await;
         let tenant = new_tenant(&db).await;
-        let alice = RecordId::new("account", Uuid::new_v7());
-        let bob = RecordId::new("account", Uuid::new_v7());
+        let alice = RecordId::new("member", Uuid::new_v7());
+        let bob = RecordId::new("member", Uuid::new_v7());
 
         let as_alice = db
-            .record_session(&tenant, alice.clone(), &everything())
+            .record_session(&tenant, &in_ui(alice.clone()), &everything())
             .await
             .unwrap();
         let as_bob = db
-            .record_session(&tenant, bob.clone(), &everything())
+            .record_session(&tenant, &in_ui(bob.clone()), &everything())
             .await
             .unwrap();
 
@@ -384,13 +430,43 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
     }
 
     #[tokio::test]
+    async fn the_token_carries_the_claims_the_audit_reads() {
+        let db = connect().await;
+        let tenant = new_tenant(&db).await;
+        let actor = Actor {
+            session: Some("5e55".into()),
+            request: Some("r-1".into()),
+            ip: Some(IpAddr::from([10, 0, 0, 7])),
+            user_agent: Some("Firefox".into()),
+            ..in_ui(RecordId::new("member", Uuid::new_v7()))
+        };
+
+        let session = db
+            .record_session(&tenant, &actor, &everything())
+            .await
+            .unwrap();
+
+        // the names the schema files' events and fields read
+        let claims: Value = session
+            .query("RETURN [$token.via, $token.sid, $token.rid, $token.ip, $token.ua]")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(
+            claims.to_sql(),
+            "['ui', '5e55', 'r-1', '10.0.0.7', 'Firefox']"
+        );
+    }
+
+    #[tokio::test]
     async fn a_token_signed_with_another_key_is_rejected() {
         let tenant = new_tenant(&connect().await).await;
         let forger = connect_signing_with(OTHER_SIGNING_KEY).await;
-        let user = RecordId::new("account", Uuid::new_v7());
+        let user = in_ui(RecordId::new("member", Uuid::new_v7()));
         assert!(
             forger
-                .record_session(&tenant, user, &everything())
+                .record_session(&tenant, &user, &everything())
                 .await
                 .is_err()
         );
@@ -413,7 +489,7 @@ yHO+6eCX0n3GmE1BdcTih8Sc/MyegLajWTy5dEDEGDhjWNmkXi5uMc+s
         let session = db
             .record_session(
                 &tenant,
-                RecordId::new("account", Uuid::new_v7()),
+                &in_ui(RecordId::new("member", Uuid::new_v7())),
                 &everything(),
             )
             .await

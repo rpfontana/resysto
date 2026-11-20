@@ -12,6 +12,7 @@
   - [Manifests](./src/backend/database/manifests.md)
   - [Changing Fields](./src/backend/database/changing-fields.md)
   - [Deploying](./src/backend/database/deploying.md)
+  - [Audit](./src/backend/database/audit.md)
 - [HTTP Layer](./src/backend/http-layer/README.md)
   - [Routing and Handlers](./src/backend/http-layer/routing-and-handlers.md)
   - [Middleware](./src/backend/http-layer/middleware.md)

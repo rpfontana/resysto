@@ -6,6 +6,7 @@ use surrealdb::engine::any::Any;
 use surrealdb::types::{Datetime, RecordId, SurrealValue};
 
 use super::account::AccountId;
+use super::audit::{self, About, Client, Event};
 use super::error::AuthError;
 use super::token::{Token, key};
 
@@ -121,12 +122,23 @@ pub(crate) async fn authenticate(
     }))
 }
 
-pub(crate) async fn logout(master: &Surreal<Any>, token: &str) -> Result<(), AuthError> {
-    master
-        .query("DELETE type::record('session', $key)")
-        .bind(("key", key(token)))
+pub(crate) async fn logout(
+    master: &Surreal<Any>,
+    token: &str,
+    client: &Client,
+) -> Result<(), AuthError> {
+    let key = key(token);
+    let ended: Option<AccountId> = master
+        .query("DELETE type::record('session', $key) RETURN VALUE $before.account")
+        .bind(("key", key.clone()))
         .await?
-        .check()?;
+        .check()?
+        .take(0)?;
+    // a session that had already ended leaves nothing to record
+    if let Some(account) = ended {
+        let about = About::of(account).in_session(key).with_client(client);
+        audit::record(master, Event::Logout, about).await?;
+    }
     tracing::info!("logout");
     Ok(())
 }
@@ -168,6 +180,7 @@ pub(crate) async fn end_session(
     master: &Surreal<Any>,
     account: AccountId,
     id: &str,
+    client: &Client,
 ) -> Result<bool, AuthError> {
     let deleted: Vec<RecordId> = master
         .query(
@@ -181,6 +194,10 @@ pub(crate) async fn end_session(
         .take(0)?;
     let ended = !deleted.is_empty();
     if ended {
+        let about = About::of(account)
+            .in_session(id.to_owned())
+            .with_client(client);
+        audit::record(master, Event::SessionEnded, about).await?;
         tracing::info!(account = %account, "session ended");
     }
     Ok(ended)
@@ -191,6 +208,7 @@ pub(crate) async fn end_other_sessions(
     master: &Surreal<Any>,
     account: AccountId,
     token: &str,
+    client: &Client,
 ) -> Result<usize, AuthError> {
     let deleted: Vec<RecordId> = master
         .query(
@@ -203,6 +221,12 @@ pub(crate) async fn end_other_sessions(
         .check()?
         .take(0)?;
     let ended = deleted.len();
+    if ended > 0 {
+        let about = About::of(account)
+            .in_session(key(token))
+            .with_client(client);
+        audit::record(master, Event::OtherSessionsEnded, about).await?;
+    }
     tracing::info!(account = %account, ended, "other sessions ended");
     Ok(ended)
 }
@@ -213,13 +237,14 @@ mod tests {
 
     use super::*;
     use crate::account::create_account;
+    use crate::audit::Client;
     use crate::login::login;
     use crate::testing::{PASSWORD, ada, bob, master, passwords, run, session_token, sign_in};
 
     #[tokio::test]
     async fn a_session_ends_at_logout_after_an_idle_hour_and_after_a_day() {
         let master = master().await;
-        create_account(&master, &passwords(), ada(), PASSWORD.into(), None, &[])
+        create_account(&master, &passwords(), ada(), PASSWORD.into())
             .await
             .unwrap();
         let mut tokens = Vec::new();
@@ -228,7 +253,9 @@ mod tests {
         }
         let [logged_out, idle, expired, used] = <[String; 4]>::try_from(tokens).unwrap();
 
-        logout(&master, &logged_out).await.unwrap();
+        logout(&master, &logged_out, &Client::default())
+            .await
+            .unwrap();
         let idle_since = "UPDATE type::record('session', $key) SET last_seen_at = time::now() - 2h";
         run(&master, idle_since, &key(&idle)).await;
         let expired_at = "UPDATE type::record('session', $key) SET expires_at = time::now() - 1s";
@@ -259,19 +286,22 @@ mod tests {
     async fn an_account_sees_and_ends_only_its_own_sessions() {
         let master = master().await;
         let passwords = passwords();
-        let account = create_account(&master, &passwords, ada(), PASSWORD.into(), None, &[])
+        let account = create_account(&master, &passwords, ada(), PASSWORD.into())
             .await
             .unwrap();
-        create_account(&master, &passwords, bob(), PASSWORD.into(), None, &[])
+        create_account(&master, &passwords, bob(), PASSWORD.into())
             .await
             .unwrap();
         let session = |email: Email, agent: &str| {
-            let agent = Some(agent.to_owned());
+            let client = Client {
+                user_agent: Some(agent.to_owned()),
+                ..Client::default()
+            };
             let passwords = &passwords;
             let master = &master;
             async move {
                 session_token(
-                    login(master, passwords, email, PASSWORD.into(), agent)
+                    login(master, passwords, email, PASSWORD.into(), &client)
                         .await
                         .unwrap(),
                 )
@@ -294,14 +324,24 @@ mod tests {
         seen.sort_unstable();
         assert_eq!(seen, [("Firefox", true), ("Safari", false)]);
 
-        assert!(!end_session(&master, account, &key(&bobs)).await.unwrap());
+        assert!(
+            !end_session(&master, account, &key(&bobs), &Client::default())
+                .await
+                .unwrap()
+        );
         assert!(authenticate(&master, &bobs).await.unwrap().is_some());
-        assert!(end_session(&master, account, &key(&other)).await.unwrap());
+        assert!(
+            end_session(&master, account, &key(&other), &Client::default())
+                .await
+                .unwrap()
+        );
         assert_eq!(authenticate(&master, &other).await.unwrap(), None);
 
         let again = session(ada(), "Edge").await;
         assert_eq!(
-            end_other_sessions(&master, account, &this).await.unwrap(),
+            end_other_sessions(&master, account, &this, &Client::default())
+                .await
+                .unwrap(),
             1
         );
         assert_eq!(authenticate(&master, &again).await.unwrap(), None);

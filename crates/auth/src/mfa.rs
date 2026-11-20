@@ -6,6 +6,7 @@ use surrealdb::types::{Bytes, RecordId, SurrealValue};
 use tokio::task;
 
 use super::account::{AccountId, active, check_password};
+use super::audit::{self, About, Client, Event};
 use super::error::AuthError;
 use super::membership::memberships;
 use super::session::{Session, end_other_sessions};
@@ -29,12 +30,13 @@ pub(crate) async fn set_up_totp(
     cipher: &Cipher,
     session: Session,
     password: String,
+    client: &Client,
 ) -> Result<TotpSetup, AuthError> {
     let found = active(master, session.account).await?;
     if found.totp && !session.mfa {
         return Err(AuthError::SecondFactorNeeded);
     }
-    check_password(master, passwords, &found, password).await?;
+    check_password(master, passwords, &found, password, client).await?;
     let secret = totp::new_secret();
     let setup = totp::setup(&secret, found.email.as_str())?;
     let sealed = cipher.seal(session.account, &secret)?;
@@ -56,6 +58,7 @@ pub(crate) async fn confirm_totp(
     account: AccountId,
     token: &str,
     code: &str,
+    client: &Client,
 ) -> Result<Vec<String>, AuthError> {
     let sealed: Option<Bytes> = master
         .query("SELECT VALUE totp_pending FROM ONLY $account")
@@ -100,7 +103,11 @@ pub(crate) async fn confirm_totp(
         .bind(("key", key(token)))
         .await?
         .check()?;
-    end_other_sessions(master, account, token).await?;
+    end_other_sessions(master, account, token, client).await?;
+    let about = About::of(account)
+        .in_session(key(token))
+        .with_client(client);
+    audit::record(master, Event::TotpBound, about).await?;
     tracing::info!(account = %account, "authenticator app bound");
     Ok(codes)
 }
@@ -111,6 +118,7 @@ pub(crate) async fn disable_totp(
     passwords: &Passwords,
     session: Session,
     password: String,
+    client: &Client,
 ) -> Result<(), AuthError> {
     if !session.mfa {
         return Err(AuthError::SecondFactorNeeded);
@@ -120,12 +128,14 @@ pub(crate) async fn disable_totp(
         return Err(AuthError::TotpRequired);
     }
     let found = active(master, session.account).await?;
-    check_password(master, passwords, &found, password).await?;
+    check_password(master, passwords, &found, password, client).await?;
     master
         .query("UPDATE $account SET totp = NONE, totp_pending = NONE RETURN NONE")
         .bind(("account", session.account))
         .await?
         .check()?;
+    let about = About::of(session.account).with_client(client);
+    audit::record(master, Event::TotpUnbound, about).await?;
     tracing::warn!(account = %session.account, "authenticator app unbound");
     Ok(())
 }
@@ -156,6 +166,7 @@ pub async fn reset_totp(master: &Surreal<Any>, email: &Email) -> Result<(), Auth
             .bind(("account", account))
             .await?
             .check()?;
+            audit::record(&tx, Event::TotpReset, About::of(account)).await?;
             Ok(Some(account))
         }
     })
@@ -182,9 +193,14 @@ pub async fn require_mfa(
         .await?
         .check()?
         .take(0)?;
-    if updated.is_empty() {
+    let Some(tenant) = updated.into_iter().next() else {
         return Err(AuthError::UnknownTenant(slug.to_owned()));
-    }
+    };
+    let about = About {
+        tenant: Some(tenant),
+        ..About::default()
+    };
+    audit::record(master, Event::MfaRequirementChanged, about).await?;
     tracing::info!(
         tenant = slug,
         ?required_for,
@@ -197,26 +213,46 @@ pub async fn require_mfa(
 mod tests {
     use super::*;
     use crate::account::{create_account, profile};
+    use crate::audit::Client;
+    use crate::membership::add_member;
     use crate::policy::ADMIN;
     use crate::session::authenticate;
     use crate::testing::{
-        PASSWORD, ada, bob, cipher, code, enroll, master, passwords, session_token, sign_in,
+        PASSWORD, ada, bob, cipher, code, enroll, master, new_master, new_tenant, passwords,
+        server, session_token, sign_in,
     };
 
     #[tokio::test]
     async fn binding_an_app_takes_the_password_and_a_code_from_it() {
         let master = master().await;
-        let account = create_account(&master, &passwords(), ada(), PASSWORD.into(), None, &[])
+        let account = create_account(&master, &passwords(), ada(), PASSWORD.into())
             .await
             .unwrap();
         let token = session_token(sign_in(&master, ada()).await);
         let session = authenticate(&master, &token).await.unwrap().unwrap();
         let (passwords, cipher) = (passwords(), cipher());
         let set_up = async |password: &str| {
-            set_up_totp(&master, &passwords, &cipher, session, password.into()).await
+            set_up_totp(
+                &master,
+                &passwords,
+                &cipher,
+                session,
+                password.into(),
+                &Client::default(),
+            )
+            .await
         };
         let confirm = async |code: String| {
-            confirm_totp(&master, &passwords, &cipher, account, &token, &code).await
+            confirm_totp(
+                &master,
+                &passwords,
+                &cipher,
+                account,
+                &token,
+                &code,
+                &Client::default(),
+            )
+            .await
         };
 
         let early = confirm("123456".into()).await;
@@ -248,8 +284,15 @@ mod tests {
             account,
             mfa: false,
         };
-        let replaced =
-            set_up_totp(&master, &passwords, &cipher, password_only, PASSWORD.into()).await;
+        let replaced = set_up_totp(
+            &master,
+            &passwords,
+            &cipher,
+            password_only,
+            PASSWORD.into(),
+            &Client::default(),
+        )
+        .await;
         assert!(
             matches!(replaced, Err(AuthError::SecondFactorNeeded)),
             "{:?}",
@@ -259,35 +302,21 @@ mod tests {
 
     #[tokio::test]
     async fn a_tenant_requires_a_second_factor_from_its_admins_or_from_everyone() {
-        let master = master().await;
-        master
-            .query("CREATE tenant SET slug = 'one', db_name = 't_one', state = 'ready'")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
+        let server = server().await;
+        let (_, master) = new_master(&server).await;
+        new_tenant(&server, &master, "one").await;
         let passwords = passwords();
-        let roles = |role: &str| vec![role.to_owned()];
-        let ada_id = create_account(
-            &master,
-            &passwords,
-            ada(),
-            PASSWORD.into(),
-            Some("one"),
-            &roles(ADMIN),
-        )
-        .await
-        .unwrap();
-        let bob_id = create_account(
-            &master,
-            &passwords,
-            bob(),
-            PASSWORD.into(),
-            Some("one"),
-            &roles("tenant/reader"),
-        )
-        .await
-        .unwrap();
+        let mut accounts = Vec::new();
+        for (email, role) in [(ada(), ADMIN), (bob(), "tenant/reader")] {
+            let account = create_account(&master, &passwords, email, PASSWORD.into())
+                .await
+                .unwrap();
+            add_member(&server, &master, account, "one", &[role.to_owned()])
+                .await
+                .unwrap();
+            accounts.push(account);
+        }
+        let [ada_id, bob_id] = <[AccountId; 2]>::try_from(accounts).unwrap();
         let required = async |account| -> Vec<bool> {
             let reachable = memberships(&master, account).await.unwrap();
             reachable.iter().map(|member| member.mfa_required).collect()
@@ -309,7 +338,14 @@ mod tests {
         let token = session_token(sign_in(&master, bob()).await);
         enroll(&master, &token).await;
         let session = authenticate(&master, &token).await.unwrap().unwrap();
-        let kept = disable_totp(&master, &passwords, session, PASSWORD.into()).await;
+        let kept = disable_totp(
+            &master,
+            &passwords,
+            session,
+            PASSWORD.into(),
+            &Client::default(),
+        )
+        .await;
         assert!(
             matches!(kept, Err(AuthError::TotpRequired)),
             "{:?}",
@@ -318,9 +354,15 @@ mod tests {
         require_mfa(&master, "one", MfaRequiredFor::Admins)
             .await
             .unwrap();
-        disable_totp(&master, &passwords, session, PASSWORD.into())
-            .await
-            .unwrap();
+        disable_totp(
+            &master,
+            &passwords,
+            session,
+            PASSWORD.into(),
+            &Client::default(),
+        )
+        .await
+        .unwrap();
         assert!(!profile(&master, bob_id).await.unwrap().unwrap().totp);
     }
 }

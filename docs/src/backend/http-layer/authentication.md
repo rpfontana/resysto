@@ -322,6 +322,8 @@ async fn admin_endpoint(RequireAdmin(user): RequireAdmin) -> AppResult<Json<Admi
 
 Authorization doesn't stop at the handler. The app's queries run in the user's SurrealDB record session, never as the system user, so the `PERMISSIONS` on each table decide which records the user can read and write. A check that a handler forgets is still enforced by the database.
 
+The token of that session also says who is writing and how: the member, the channel (`ui` for the SPA), the browser session and the request id. Each table's fields and audit event read them from `$auth` and `$token`, so every change records its author without the handler doing anything. The Audit chapter of the Database section has the details.
+
 ## Middleware-based authentication
 
 Instead of putting the extractor on each handler, authentication can also be applied as middleware to a whole group of routes. This is handy for a block of routes that all require authentication, without repeating `AuthUser` in every handler signature.

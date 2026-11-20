@@ -60,7 +60,7 @@ Adding `version` to a table that already has rows means adding a required field 
 
 ## Keeping the version out of the entity
 
-The entity struct holds business data only. The id, the version, and the timestamps are written by the server alone, so they don't belong in `User`, where any code could set them. They live in a generic `Record`, which wraps the entity's data and stays flat in the database and in JSON:
+The entity struct holds business data only. The id, the version, the timestamps and who wrote the record are written by the server alone, so they don't belong in `User`, where any code could set them. They live in a generic `Record`, which wraps the entity's data and stays flat in the database and in JSON:
 
 ```rust
 #[derive(Debug, Serialize, SurrealValue)]
@@ -68,15 +68,20 @@ pub struct Record<E: Entity, T: SurrealValue> {
     pub id: Id<E>,
     pub version: i64,
     pub created_at: Datetime,
+    pub created_by: Option<MemberId>,
     pub updated_at: Datetime,
+    pub updated_by: Option<MemberId>,
     #[serde(flatten)]
     #[surreal(flatten)]
     pub data: T,
 }
 
 pub type UserRecord = Record<entity::User, User>;
-// { "id": "...", "version": 3, "created_at": "...", "updated_at": "...", "name": "Bob", ... }
+// { "id": "...", "version": 3, "created_at": "...", "created_by": "...", "updated_at": "...",
+//   "updated_by": "...", "name": "Bob", ... }
 ```
+
+The Audit chapter of the Database section explains `created_by` and `updated_by`.
 
 Reads and writes return the record, while inputs never contain these fields. Since input structs reject unknown fields, a client that sends `version` in a body gets a `400` instead of the illusion that it set something.
 

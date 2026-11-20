@@ -81,12 +81,26 @@ pub(super) async fn delete(db: &impl Executor, id: PersonId) -> Result<bool, Err
 
 #[cfg(test)]
 mod tests {
-    use resysto_surrealdb::{Db, Grant};
+    use std::net::IpAddr;
+
+    use resysto_model::MemberId;
+    use resysto_surrealdb::{Actor, Db, Grant, Via};
     use surrealdb::Surreal;
     use surrealdb::engine::any::Any;
-    use surrealdb::types::{RecordId, Uuid, Value};
+    use surrealdb::types::{RecordId, SurrealValue, Uuid, Value};
 
     use super::*;
+
+    fn in_ui(member: RecordId) -> Actor {
+        Actor {
+            member,
+            via: Via::Ui,
+            session: None,
+            request: None,
+            ip: None,
+            user_agent: None,
+        }
+    }
 
     async fn tenant() -> Surreal<Any> {
         let db = Db::memory().await.unwrap();
@@ -138,6 +152,102 @@ mod tests {
         assert_eq!(stored.created_at, created.created_at);
     }
 
+    #[derive(Debug, PartialEq, SurrealValue)]
+    struct Change {
+        event: String,
+        by: Option<MemberId>,
+        via: Option<String>,
+        request: Option<String>,
+        ip: Option<String>,
+        user_agent: Option<String>,
+        phone_before: Option<String>,
+        phone_after: Option<String>,
+    }
+
+    #[tokio::test]
+    async fn every_write_records_who_made_it_and_what_changed() {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, "t_acme")
+            .await
+            .unwrap();
+        let system = db.system_session("t_acme").await.unwrap();
+        let acme = organization(&system).await;
+        let (ada_member, bob_member) = (MemberId::new(), MemberId::new());
+        let everything = Grant {
+            organizations: None,
+            write: true,
+        };
+        let from_ada = Actor {
+            request: Some("r-1".into()),
+            ip: Some(IpAddr::from([10, 0, 0, 7])),
+            user_agent: Some("Firefox".into()),
+            ..in_ui(ada_member.into())
+        };
+        let as_ada = db
+            .record_session("t_acme", &from_ada, &everything)
+            .await
+            .unwrap();
+        let as_bob = db
+            .record_session("t_acme", &in_ui(bob_member.into()), &everything)
+            .await
+            .unwrap();
+        let id = PersonId::new();
+
+        insert(&as_ada, id, ada(acme)).await.unwrap();
+        let cleared = Person {
+            phone: None,
+            ..ada(acme)
+        };
+        let updated = update(&as_bob, id, cleared).await.unwrap().unwrap();
+        assert_eq!(updated.created_by, Some(ada_member));
+        assert_eq!(updated.updated_by, Some(bob_member));
+        delete(&as_bob, id).await.unwrap();
+
+        let changes: Vec<Change> = system
+            .query(
+                "SELECT event, by, via, request, ip, user_agent, before.phone AS phone_before,
+                     after.phone AS phone_after
+                 FROM audit_change WHERE record = $id ORDER BY id",
+            )
+            .bind(("id", id))
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        let by_bob = |event: &str, phone_before: Option<String>| Change {
+            event: event.into(),
+            by: Some(bob_member),
+            via: Some("ui".into()),
+            request: None,
+            ip: None,
+            user_agent: None,
+            phone_before,
+            phone_after: None,
+        };
+        let expected = [
+            Change {
+                event: "CREATE".into(),
+                by: Some(ada_member),
+                via: Some("ui".into()),
+                request: Some("r-1".into()),
+                ip: Some("10.0.0.7".into()),
+                user_agent: Some("Firefox".into()),
+                phone_before: None,
+                phone_after: Some("06 123".into()),
+            },
+            by_bob("UPDATE", Some("06 123".into())),
+            by_bob("DELETE", None),
+        ];
+        assert_eq!(changes, expected);
+        let seen: Vec<Value> = as_ada
+            .query("SELECT * FROM audit_change")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert!(seen.is_empty(), "a record session read {seen:?}");
+    }
+
     #[tokio::test]
     async fn an_organization_with_people_cannot_be_deleted() {
         let db = tenant().await;
@@ -164,8 +274,11 @@ mod tests {
             organizations: Some(Vec::new()),
             write: false,
         };
-        let user = RecordId::new("account", Uuid::new_v7());
-        let session = db.record_session("t_acme", user, &scoped).await.unwrap();
+        let user = RecordId::new("member", Uuid::new_v7());
+        let session = db
+            .record_session("t_acme", &in_ui(user), &scoped)
+            .await
+            .unwrap();
 
         let plan: Value = session
             .query(format!("{LIST} EXPLAIN"))

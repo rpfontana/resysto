@@ -33,7 +33,7 @@ pub(crate) async fn widen_to_branches(
     };
     request.extensions_mut().insert(TenantAccess {
         database: member.database,
-        account: member.account.into(),
+        actor: member.actor,
         grant: Grant {
             organizations,
             write: member.write,

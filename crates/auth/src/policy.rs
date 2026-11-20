@@ -128,7 +128,7 @@ impl Verb {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Read => "read",
             Self::Write => "write",
@@ -162,23 +162,24 @@ mod tests {
             (Verb::Read, "people"),
             (Verb::Write, "people"),
             (Verb::Delete, "people"),
+            (Verb::Read, "audit"),
         ];
         let cases = [
-            (member(&["tenant/admin"], true), [true; 6]),
+            (member(&["tenant/admin"], true), [true; 7]),
             (
                 member(&["tenant/admin"], false),
-                [true, false, false, true, true, true],
+                [true, false, false, true, true, true, false],
             ),
             (
                 member(&["tenant/analyst"], true),
-                [true, false, false, true, true, true],
+                [true, false, false, true, true, true, false],
             ),
             (
                 member(&["tenant/reader"], true),
-                [true, false, false, true, false, false],
+                [true, false, false, true, false, false, false],
             ),
-            (member(&[], true), [false; 6]),
-            (member(&["tenant/owner"], true), [false; 6]),
+            (member(&[], true), [false; 7]),
+            (member(&["tenant/owner"], true), [false; 7]),
         ];
         for (member, allowed) in cases {
             for ((verb, resource), allowed) in requests.into_iter().zip(allowed) {

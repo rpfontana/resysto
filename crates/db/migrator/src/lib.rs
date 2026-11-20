@@ -258,10 +258,21 @@ async fn provision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use resysto_surrealdb::Grant;
+    use resysto_surrealdb::{Actor, Grant, Via};
     use surrealdb::types::{RecordId, Uuid, Value};
 
     use super::*;
+
+    fn in_ui(member: RecordId) -> Actor {
+        Actor {
+            member,
+            via: Via::Ui,
+            session: None,
+            request: None,
+            ip: None,
+            user_agent: None,
+        }
+    }
 
     // test-only key pair
     const SIGNING_KEY: &str = "-----BEGIN PRIVATE KEY-----
@@ -320,10 +331,10 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
     async fn a_provisioned_tenant_accepts_record_sessions() {
         let db = connect().await;
         let tenant = new_tenant(&db).await;
-        let user = RecordId::new("account", Uuid::new_v7());
+        let user = RecordId::new("member", Uuid::new_v7());
 
         let session = db
-            .record_session(&tenant, user.clone(), &everything())
+            .record_session(&tenant, &in_ui(user.clone()), &everything())
             .await
             .unwrap();
 
@@ -378,8 +389,8 @@ M/YbYjNjFSh1iRZ8QMuBim+mBVxleihA7K5+TECGu007MkQ5yHAo0M7V8w==
             .collect();
         assert_eq!(failed, [missing.as_str()]);
         for database in [&ready, &suspended] {
-            let user = RecordId::new("account", Uuid::new_v7());
-            db.record_session(database, user, &everything())
+            let user = RecordId::new("member", Uuid::new_v7());
+            db.record_session(database, &in_ui(user), &everything())
                 .await
                 .unwrap();
         }

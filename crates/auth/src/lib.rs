@@ -1,6 +1,7 @@
-//! Accounts, browser sessions, second factors and what a member may do in a tenant
+//! Accounts, browser sessions, second factors, what a member may do in a tenant, and its audit
 
 mod account;
+mod audit;
 mod error;
 mod http;
 mod login;
@@ -18,8 +19,10 @@ mod token;
 mod totp;
 
 pub use account::{Account, AccountId, create_account};
+pub use audit::{Client, audit_router};
 pub use error::AuthError;
 pub use http::{MasterName, TenantMember, TenantPath, require_member, router};
+pub use membership::add_member;
 pub use mfa::{MfaRequiredFor, require_mfa, reset_totp};
 pub use origin::same_origin;
 pub use password::{PasswordError, Passwords};

@@ -4,15 +4,15 @@ use resysto_surrealdb::transaction;
 use serde::Serialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb::types::{RecordId, SurrealValue};
+use surrealdb::types::SurrealValue;
 use tokio::task;
 
+use super::audit::{self, About, Client, Event};
 use super::error::AuthError;
 use super::session::end_other_sessions;
 use super::throttle::{clear_failures, count_failure, ensure_not_locked};
 use super::token::key;
 use crate::password::Passwords;
-use crate::policy::ROLES;
 
 #[derive(Debug)]
 pub enum Account {}
@@ -48,36 +48,18 @@ pub(super) struct Credentials {
     pub(super) totp: bool,
 }
 
-/// Creates an account, a member with `roles` of the tenant `tenant` names when there is one
+/// Creates an account, a member of no tenant yet
 pub async fn create_account(
     master: &Surreal<Any>,
     passwords: &Passwords,
     email: Email,
     password: String,
-    tenant: Option<&str>,
-    roles: &[String],
 ) -> Result<AccountId, AuthError> {
-    if let Some(unknown) = roles.iter().find(|role| !ROLES.contains(&role.as_str())) {
-        return Err(AuthError::UnknownRole(unknown.clone()));
-    }
-    let tenant = match tenant {
-        None => None,
-        Some(slug) => {
-            let found: Option<RecordId> = master
-                .query("SELECT VALUE id FROM tenant WHERE slug = $slug LIMIT 1")
-                .bind(("slug", slug.to_owned()))
-                .await?
-                .check()?
-                .take(0)?;
-            Some(found.ok_or_else(|| AuthError::UnknownTenant(slug.to_owned()))?)
-        }
-    };
     let passwords = passwords.clone();
     let hash = task::spawn_blocking(move || passwords.hash(&password)).await??;
     let id = AccountId::new();
     transaction(master, |tx| {
-        let (email, hash, tenant, roles) =
-            (email.clone(), hash.clone(), tenant.clone(), roles.to_vec());
+        let (email, hash) = (email.clone(), hash.clone());
         async move {
             tx.query("CREATE $id SET email = $email, password_hash = $password_hash RETURN NONE")
                 .bind(("id", id))
@@ -85,14 +67,7 @@ pub async fn create_account(
                 .bind(("password_hash", hash))
                 .await?
                 .check()?;
-            if let Some(tenant) = tenant {
-                tx.query("RELATE $account->member_of->$tenant SET roles = $roles RETURN NONE")
-                    .bind(("account", id))
-                    .bind(("tenant", tenant))
-                    .bind(("roles", roles))
-                    .await?
-                    .check()?;
-            }
+            audit::record(&tx, Event::AccountCreated, About::of(id)).await?;
             Ok(())
         }
     })
@@ -126,9 +101,10 @@ pub(crate) async fn change_password(
     token: &str,
     current: String,
     new: String,
+    client: &Client,
 ) -> Result<(), AuthError> {
     let found = active(master, account).await?;
-    check_password(master, passwords, &found, current).await?;
+    check_password(master, passwords, &found, current, client).await?;
     let hasher = passwords.clone();
     let hash = task::spawn_blocking(move || hasher.hash(&new)).await??;
     master
@@ -137,7 +113,11 @@ pub(crate) async fn change_password(
         .bind(("password_hash", hash))
         .await?
         .check()?;
-    end_other_sessions(master, account, token).await?;
+    end_other_sessions(master, account, token, client).await?;
+    let about = About::of(account)
+        .in_session(key(token))
+        .with_client(client);
+    audit::record(master, Event::PasswordChanged, about).await?;
     tracing::info!(account = %account, "password changed");
     Ok(())
 }
@@ -161,6 +141,7 @@ pub(super) async fn check_password(
     passwords: &Passwords,
     found: &Credentials,
     password: String,
+    client: &Client,
 ) -> Result<(), AuthError> {
     let attempts = key(found.email.as_str());
     ensure_not_locked(master, &attempts).await?;
@@ -169,6 +150,8 @@ pub(super) async fn check_password(
     let matches = task::spawn_blocking(move || checker.verify(&password, Some(&hash))).await?;
     if !matches {
         let failures = count_failure(master, &attempts).await?;
+        let about = About::of(found.id).with_client(client);
+        audit::record(master, Event::PasswordRefused, about).await?;
         tracing::warn!(account = %found.id, failures, "password refused");
         return Err(AuthError::WrongPassword);
     }
@@ -179,6 +162,7 @@ pub(super) async fn check_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::Client;
     use crate::login::login;
     use crate::session::authenticate;
     use crate::testing::{PASSWORD, ada, master, passwords, session_token, sign_in};
@@ -187,7 +171,7 @@ mod tests {
     async fn changing_the_password_keeps_this_session_and_ends_the_others() {
         let master = master().await;
         let passwords = passwords();
-        let account = create_account(&master, &passwords, ada(), PASSWORD.into(), None, &[])
+        let account = create_account(&master, &passwords, ada(), PASSWORD.into())
             .await
             .unwrap();
         let this = session_token(sign_in(&master, ada()).await);
@@ -201,6 +185,7 @@ mod tests {
             &this,
             "wrong".into(),
             new.into(),
+            &Client::default(),
         )
         .await;
         assert!(
@@ -215,20 +200,28 @@ mod tests {
             &this,
             PASSWORD.into(),
             new.into(),
+            &Client::default(),
         )
         .await
         .unwrap();
 
         assert!(authenticate(&master, &this).await.unwrap().is_some());
         assert_eq!(authenticate(&master, &other).await.unwrap(), None);
-        let old = login(&master, &passwords, ada(), PASSWORD.into(), None).await;
+        let old = login(
+            &master,
+            &passwords,
+            ada(),
+            PASSWORD.into(),
+            &Client::default(),
+        )
+        .await;
         assert!(
             matches!(old, Err(AuthError::InvalidCredentials)),
             "{:?}",
             old.err()
         );
         assert!(
-            login(&master, &passwords, ada(), new.into(), None)
+            login(&master, &passwords, ada(), new.into(), &Client::default())
                 .await
                 .is_ok()
         );
