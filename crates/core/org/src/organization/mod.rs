@@ -9,7 +9,4 @@ mod store;
 
 pub use http::router;
 pub use mcp::tools;
-pub use model::{
-    Industry, MAX_DEPTH, NewOrganization, Organization, OrganizationPatch, OrganizationRecord,
-};
-pub use ops::{OrganizationError, create, delete, get, list, reassign, update, with_branches};
+pub use ops::{OrganizationError, with_branches};

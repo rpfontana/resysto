@@ -73,7 +73,6 @@ struct OrganizationView {
 #[derive(Debug, Serialize)]
 struct OverviewView {
     path: String,
-    #[serde(flatten)]
     organization: OrganizationRecord,
     branches: Vec<Branch>,
     more_branches: bool,
@@ -197,80 +196,5 @@ fn refusal(error: OrganizationError) -> ToolError {
         }
         OrganizationError::Db(error) => error.into(),
         other => ToolError::refused(other.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use resysto_model::MemberId;
-    use resysto_surrealdb::{Actor, Db, Grant, Via};
-    use serde_json::json;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn an_overview_names_the_branches_and_counts_what_belongs_to_the_organization() {
-        let db = Db::memory().await.unwrap();
-        resysto_migrator::provision_tenant(&db, "t_acme")
-            .await
-            .unwrap();
-        let [acme, milano, beta, beta_milano] = [(); 4].map(|()| OrganizationId::new());
-        db.system_session("t_acme")
-            .await
-            .unwrap()
-            .query(
-                "CREATE $acme SET name = 'Acme', path = [];
-                 CREATE $milano SET name = 'Milano', parent = $acme, path = [$acme];
-                 CREATE $beta SET name = 'Beta', path = [];
-                 CREATE $beta_milano SET name = 'Milano', parent = $beta, path = [$beta];
-                 CREATE person SET first_name = 'Ada', last_name = 'Lovelace',
-                     organization_ids = [$acme];",
-            )
-            .bind(("acme", acme))
-            .bind(("milano", milano))
-            .bind(("beta", beta))
-            .bind(("beta_milano", beta_milano))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let actor = Actor {
-            member: MemberId::new().into(),
-            via: Via::Mcp,
-            client: None,
-            session: None,
-            request: None,
-            ip: None,
-            user_agent: None,
-        };
-        let reading = Grant {
-            organizations: None,
-            write: false,
-        };
-        let session = db.record_session("t_acme", &actor, &reading).await.unwrap();
-        let ask = |organization: String| -> Overview {
-            serde_json::from_value(json!({ "organization": organization })).unwrap()
-        };
-
-        let shown = overview(session.clone(), ask("acme".into())).await.unwrap();
-
-        let branches: Vec<&str> = shown
-            .branches
-            .iter()
-            .map(|branch| branch.name.as_str())
-            .collect();
-        assert_eq!((shown.path.as_str(), branches), ("Acme", vec!["Milano"]));
-        assert_eq!(shown.records.get("person"), Some(&1));
-        let by_id = overview(session.clone(), ask(milano.to_string()))
-            .await
-            .unwrap();
-        assert_eq!(by_id.path, "Acme › Milano");
-        match overview(session, ask("Milano".into())).await {
-            Err(ToolError::Refused(message)) => assert!(
-                message.contains("Acme › Milano") && message.contains("Beta › Milano"),
-                "{message}"
-            ),
-            other => panic!("an ambiguous name went through: {other:?}"),
-        }
     }
 }

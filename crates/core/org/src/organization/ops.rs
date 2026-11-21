@@ -247,3 +247,336 @@ fn uses_text(uses: &BTreeMap<String, i64>) -> String {
         .collect();
     parts.join(", ")
 }
+
+#[cfg(test)]
+mod tests {
+    use resysto_model::MemberId;
+    use resysto_surrealdb::{Actor, Db, Grant, Via};
+    use surrealdb::types::RecordId;
+
+    use super::*;
+
+    const TENANT: &str = "t_acme";
+
+    // a tenant plus a table that tags its rows like every bounded context does
+    async fn tenant() -> Db {
+        let db = Db::memory().await.unwrap();
+        resysto_migrator::provision_tenant(&db, TENANT)
+            .await
+            .unwrap();
+        db.system_session(TENANT)
+            .await
+            .unwrap()
+            .query(
+                "DEFINE TABLE item SCHEMAFULL PERMISSIONS FULL;
+                 DEFINE FIELD organization_ids ON item TYPE array<record<organization>>
+                     REFERENCE ON DELETE REJECT ASSERT array::len($value) > 0;",
+            )
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        db
+    }
+
+    async fn session(db: &Db, grant: &Grant) -> Surreal<Any> {
+        let actor = Actor {
+            member: MemberId::new().into(),
+            via: Via::Ui,
+            client: None,
+            session: None,
+            request: None,
+            ip: None,
+            user_agent: None,
+        };
+        db.record_session(TENANT, &actor, grant).await.unwrap()
+    }
+
+    fn everything() -> Grant {
+        Grant {
+            organizations: None,
+            write: true,
+        }
+    }
+
+    fn within(organizations: &[OrganizationId]) -> Grant {
+        Grant {
+            organizations: Some(organizations.iter().copied().map(RecordId::from).collect()),
+            write: true,
+        }
+    }
+
+    fn named(name: &str, parent: Option<OrganizationId>) -> NewOrganization {
+        NewOrganization {
+            name: name.into(),
+            parent,
+            ..NewOrganization::default()
+        }
+    }
+
+    fn renamed(name: &str) -> OrganizationPatch {
+        OrganizationPatch {
+            name: Some(name.into()),
+            ..OrganizationPatch::default()
+        }
+    }
+
+    async fn add(db: &Surreal<Any>, parent: Option<OrganizationId>) -> OrganizationId {
+        create(db, named("acme", parent)).await.unwrap().id
+    }
+
+    async fn version_of(db: &Surreal<Any>, id: OrganizationId) -> i64 {
+        get(db, id).await.unwrap().version
+    }
+
+    async fn path_of(db: &Surreal<Any>, id: OrganizationId) -> Vec<OrganizationId> {
+        get(db, id).await.unwrap().data.path
+    }
+
+    // a move made on the version just read
+    async fn move_to(
+        db: &Surreal<Any>,
+        id: OrganizationId,
+        parent: Option<OrganizationId>,
+    ) -> Result<OrganizationRecord, OrganizationError> {
+        let patch = OrganizationPatch {
+            parent: Some(parent),
+            ..OrganizationPatch::default()
+        };
+        update(db, id, version_of(db, id).await, patch).await
+    }
+
+    async fn tag(db: &Db, organizations: &[OrganizationId]) {
+        db.system_session(TENANT)
+            .await
+            .unwrap()
+            .query("CREATE item SET organization_ids = $ids")
+            .bind(("ids", organizations.to_vec()))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_parent_must_exist_and_the_tree_stops_five_levels_down() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+
+        let orphan = create(&all, named("orphan", Some(OrganizationId::new()))).await;
+        assert!(
+            matches!(orphan, Err(OrganizationError::ParentNotFound)),
+            "{orphan:?}"
+        );
+
+        let mut deepest = add(&all, None).await;
+        for _ in 0..MAX_DEPTH {
+            deepest = add(&all, Some(deepest)).await;
+        }
+        assert_eq!(path_of(&all, deepest).await.len(), MAX_DEPTH);
+        let too_deep = create(&all, named("too deep", Some(deepest))).await;
+        assert!(
+            matches!(too_deep, Err(OrganizationError::TooDeep)),
+            "{too_deep:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn moving_a_branch_rewrites_the_paths_below_it() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let r1 = add(&all, None).await;
+        let a = add(&all, Some(r1)).await;
+        let b = add(&all, Some(a)).await;
+        let c = add(&all, Some(b)).await;
+        let r2 = add(&all, None).await;
+
+        let moved = move_to(&all, a, Some(r2)).await.unwrap();
+        assert_eq!(moved.data.parent, Some(r2));
+        assert_eq!(path_of(&all, a).await, [r2]);
+        assert_eq!(path_of(&all, b).await, [r2, a]);
+        assert_eq!(path_of(&all, c).await, [r2, a, b]);
+
+        let moved = move_to(&all, a, None).await.unwrap();
+        assert_eq!(moved.data.parent, None);
+        assert!(path_of(&all, a).await.is_empty());
+        assert_eq!(path_of(&all, b).await, [a]);
+        assert_eq!(path_of(&all, c).await, [a, b]);
+    }
+
+    #[tokio::test]
+    async fn a_move_that_would_break_the_tree_changes_nothing() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let root = add(&all, None).await;
+        let a = add(&all, Some(root)).await;
+        let b = add(&all, Some(a)).await;
+        let mut deep = add(&all, None).await;
+        for _ in 1..MAX_DEPTH {
+            deep = add(&all, Some(deep)).await;
+        }
+
+        let own = move_to(&all, a, Some(a)).await;
+        assert!(matches!(own, Err(OrganizationError::OwnParent)), "{own:?}");
+        let under_child = move_to(&all, a, Some(b)).await;
+        assert!(
+            matches!(under_child, Err(OrganizationError::Cycle)),
+            "{under_child:?}"
+        );
+        // b would sit six levels down
+        let too_deep = move_to(&all, a, Some(deep)).await;
+        assert!(
+            matches!(too_deep, Err(OrganizationError::TooDeep)),
+            "{too_deep:?}"
+        );
+        let missing = move_to(&all, a, Some(OrganizationId::new())).await;
+        assert!(
+            matches!(missing, Err(OrganizationError::ParentNotFound)),
+            "{missing:?}"
+        );
+        assert_eq!(path_of(&all, b).await, [root, a]);
+
+        // one level up the same branch fits exactly
+        let above_deep = path_of(&all, deep).await.last().copied();
+        move_to(&all, a, above_deep).await.unwrap();
+        assert_eq!(path_of(&all, b).await.len(), MAX_DEPTH);
+    }
+
+    #[tokio::test]
+    async fn updating_a_missing_organization_creates_nothing() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let ghost = OrganizationId::new();
+
+        let updated = update(&all, ghost, 1, renamed("ghost")).await;
+        assert!(
+            matches!(updated, Err(OrganizationError::NotFound)),
+            "{updated:?}"
+        );
+        let read = get(&all, ghost).await;
+        assert!(matches!(read, Err(OrganizationError::NotFound)), "{read:?}");
+    }
+
+    #[tokio::test]
+    async fn only_an_organization_without_children_or_records_is_deleted() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let parent = add(&all, None).await;
+        let child = add(&all, Some(parent)).await;
+        let other = add(&all, None).await;
+        tag(&db, &[child]).await;
+        tag(&db, &[child, other]).await;
+
+        let with_child = delete(&all, parent, version_of(&all, parent).await).await;
+        assert!(
+            matches!(with_child, Err(OrganizationError::HasChildren)),
+            "{with_child:?}"
+        );
+        let with_records = delete(&all, child, version_of(&all, child).await).await;
+        assert!(
+            matches!(&with_records, Err(OrganizationError::InUse(uses)) if uses.get("item") == Some(&2)),
+            "{with_records:?}"
+        );
+
+        reassign(&all, child, other).await.unwrap();
+        for id in [child, parent] {
+            delete(&all, id, version_of(&all, id).await).await.unwrap();
+        }
+        let gone = delete(&all, parent, 1).await;
+        assert!(matches!(gone, Err(OrganizationError::NotFound)), "{gone:?}");
+    }
+
+    #[tokio::test]
+    async fn a_reassign_goes_to_another_organization_that_exists() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let x = add(&all, None).await;
+        let y = add(&all, None).await;
+        let ghost = OrganizationId::new();
+        tag(&db, &[x]).await;
+
+        let to_itself = reassign(&all, x, x).await;
+        assert!(
+            matches!(to_itself, Err(OrganizationError::SameTarget)),
+            "{to_itself:?}"
+        );
+        let to_ghost = reassign(&all, x, ghost).await;
+        assert!(
+            matches!(to_ghost, Err(OrganizationError::TargetNotFound)),
+            "{to_ghost:?}"
+        );
+        let from_ghost = reassign(&all, ghost, y).await;
+        assert!(
+            matches!(from_ghost, Err(OrganizationError::NotFound)),
+            "{from_ghost:?}"
+        );
+
+        assert_eq!(reassign(&all, x, y).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_scoped_member_sees_its_branches_and_changes_no_organization() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let root = add(&all, None).await;
+        let milano = add(&all, Some(root)).await;
+        let sede = add(&all, Some(milano)).await;
+        let roma = add(&all, Some(root)).await;
+        let ghost = OrganizationId::new();
+
+        // the server widens a member's organizations on a system session, before its own exists
+        let system = db.system_session(TENANT).await.unwrap();
+        let reached = with_branches(&system, vec![milano, ghost]).await.unwrap();
+        assert_eq!(reached, [milano, ghost, sede]);
+        let scoped = session(&db, &within(&reached)).await;
+
+        let listed = list(&scoped, PageRequest::default()).await.unwrap();
+        let seen: Vec<OrganizationId> = listed.data.iter().map(|found| found.id).collect();
+        assert_eq!(seen, [sede, milano]);
+
+        let outside = get(&scoped, roma).await;
+        assert!(
+            matches!(outside, Err(OrganizationError::NotFound)),
+            "{outside:?}"
+        );
+        let below = create(&scoped, named("ufficio", Some(sede))).await;
+        assert!(
+            matches!(below, Err(OrganizationError::Forbidden)),
+            "{below:?}"
+        );
+        let version = version_of(&scoped, sede).await;
+        let changed = update(&scoped, sede, version, renamed("sede nuova")).await;
+        assert!(
+            matches!(changed, Err(OrganizationError::Forbidden)),
+            "{changed:?}"
+        );
+        let deleted = delete(&scoped, sede, version).await;
+        assert!(
+            matches!(deleted, Err(OrganizationError::Forbidden)),
+            "{deleted:?}"
+        );
+        assert_eq!(get(&all, sede).await.unwrap().data.name, "acme");
+    }
+
+    #[tokio::test]
+    async fn a_write_on_a_version_already_changed_is_refused_and_changes_nothing() {
+        let db = tenant().await;
+        let all = session(&db, &everything()).await;
+        let id = add(&all, None).await;
+        let read = version_of(&all, id).await;
+        update(&all, id, read, renamed("acme spa")).await.unwrap();
+
+        // a second writer that read the organization before the first one wrote
+        let second = update(&all, id, read, renamed("acme srl")).await;
+        assert!(
+            matches!(second, Err(OrganizationError::Stale(_))),
+            "{second:?}"
+        );
+        let deleted = delete(&all, id, read).await;
+        assert!(
+            matches!(deleted, Err(OrganizationError::Stale(_))),
+            "{deleted:?}"
+        );
+        assert_eq!(get(&all, id).await.unwrap().data.name, "acme spa");
+    }
+}

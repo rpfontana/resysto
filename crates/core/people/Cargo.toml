@@ -19,11 +19,11 @@ utoipa-axum.workspace = true
 validator.workspace = true
 
 [dev-dependencies]
+axum-test.workspace = true
 resysto-migrator = { path = "../../db/migrator" }
 resysto-surrealdb = { path = "../../db/surrealdb", features = ["mem"] }
 serde_json.workspace = true
 tokio.workspace = true
-tower.workspace = true
 
 [lints]
 workspace = true
